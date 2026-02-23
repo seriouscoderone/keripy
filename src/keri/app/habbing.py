@@ -231,6 +231,7 @@ class Habery:
                                   exc=self.exc, local=True, version=Vrsn_1_0)
         self.habs = {}  # empty .habs
         self._signator = None
+        self._confitage = None
         self.inited = False
 
         # save init kwy word arg parameters as ._inits in order to later finish
@@ -728,59 +729,27 @@ class Habery:
         return None
 
     def reconfigure(self):
-        """Apply configuration from config file managed by .cf. to this Habery
-        Process any oobis or endpoints
-
-        config file  json or hjon
-
-        {
-          "dt": "2021-01-01T00:00:00.000000+00:00",
-          "nel":
-          {
-            "dt": "2021-01-01T00:00:00.000000+00:00",
-            "curls":
-            [
-              "tcp://localhost:5621/"
-            ]
-          },
-          "iurls":
-          [
-            "tcp://localhost:5620/?role=peer&name=tam"
-          ],
-          "durls":
-          [
-            "http://127.0.0.1:7723/oobi/EBNaNu-M9P5cgrnfl2Fvymy4E_jvxxyjb70PRtiANlJy",
-            "http://127.0.0.1:7723/oobi/EMhvwOlyEJ9kN4PrwCpr9Jsv7TxPhiYveZ0oP3lJzdEi",
-          ],
-          "wurls":
-          [
-            "http://127.0.0.1:5644/.well-known/keri/oobi/EBNaNu-M9P5cgrnfl2Fvymy4E_jvxxyjb70PRtiANlJy?name=Root"
-          ]
-        }
-
-
-        Config file is meant to be read only at init not changed by app at
-        run time. Any dynamic app changes must go in database not config file
-        that way we don't have to worry about multiple writers of cf.
-        Use config file to preload database not as a database. Config file may
-        have named sections for Habery or individual Habs as needed.
-
+        """Apply configuration from config source .cf to this Habery.
+        Parses raw config into typed Confitage, then applies bootstrap
+        OOBIs to database. Config is read-only at init — use database
+        for dynamic runtime changes.
         """
-        conf = self.cf.get()
-        if "dt" in conf:  # datetime of config file
-            dt = help.fromIso8601(conf["dt"])  # raises error if not convert
-            if "iurls" in conf:  # process OOBI URLs
-                for oobi in conf["iurls"]:
-                    obr = basing.OobiRecord(date=help.toIso8601(dt))
-                    self.db.oobis.put(keys=(oobi,), val=obr)
-            if "durls" in conf:  # process OOBI URLs
-                for oobi in conf["durls"]:
-                    obr = basing.OobiRecord(date=help.toIso8601(dt))
-                    self.db.oobis.put(keys=(oobi,), val=obr)
-            if "wurls" in conf:  # well known OOBI URLs for MFA
-                for oobi in conf["wurls"]:
-                    obr = basing.OobiRecord(date=help.toIso8601(dt))
-                    self.db.woobi.put(keys=(oobi,), val=obr)
+        raw = self.cf.get()
+        self._confitage = configing.parseConfig(raw)
+        boot = self._confitage.boot
+
+        if boot.dt:
+            dt = help.fromIso8601(boot.dt)
+            datestr = help.toIso8601(dt)
+            for oobi in boot.iurls:
+                obr = basing.OobiRecord(date=datestr)
+                self.db.oobis.put(keys=(oobi,), val=obr)
+            for oobi in boot.durls:
+                obr = basing.OobiRecord(date=datestr)
+                self.db.oobis.put(keys=(oobi,), val=obr)
+            for oobi in boot.wurls:
+                obr = basing.OobiRecord(date=datestr)
+                self.db.woobi.put(keys=(oobi,), val=obr)
 
     @property
     def signator(self):
@@ -1067,68 +1036,38 @@ class BaseHab:
         self.db.names.pin(keys=(ns, self.name),
                           val=self.pre)
 
-    def reconfigure(self):
-        """Apply configuration from config file managed by .cf. to this Hab.
-        Assumes that .pre and signing keys have been setup in order to create
-        own endpoint auth when provided in .cf.
+    def applyEndage(self, endage):
+        """Apply typed endpoint configuration for this hab.
 
-        config file  json or hjon
-
-        {
-          "dt": "2021-01-01T00:00:00.000000+00:00",
-          "nel":
-          {
-            "dt": "2021-01-01T00:00:00.000000+00:00",
-            "curls":
-            [
-              "tcp://localhost:5621/"
-            ]
-          },
-          "iurls":
-          [
-            "tcp://localhost:5620/?role=peer&name=tam"
-          ],
-          "durls":
-          [
-            "http://127.0.0.1:7723/oobi/EBNaNu-M9P5cgrnfl2Fvymy4E_jvxxyjb70PRtiANlJy",
-            "http://127.0.0.1:7723/oobi/EMhvwOlyEJ9kN4PrwCpr9Jsv7TxPhiYveZ0oP3lJzdEi",
-          ],
-          "wurls":
-          [
-            "http://127.0.0.1:5644/.well-known/keri/oobi/EBNaNu-M9P5cgrnfl2Fvymy4E_jvxxyjb70PRtiANlJy?name=Root"
-          ]
-        }
-
-
-
-        Config file is meant to be read only at init not changed by app at
-        run time. Any dynamic app changes must go in database not config file
-        that way we don't have to worry about multiple writers of cf.
-        Use config file to preload database not as a database. Config file may
-        have named sections for Habery or individual Habs as needed.
+        Parameters:
+            endage (configing.Endage): endpoint config for this hab
         """
-
-        conf = self.cf.get()
-        if self.name not in conf:
+        if not endage or not endage.dt:
             return
 
-        conf = conf[self.name]
-        if "dt" in conf:  # datetime of config file
-            dt = help.fromIso8601(conf["dt"])  # raises error if not convert
-            msgs = bytearray()
-            msgs.extend(self.makeEndRole(eid=self.pre,
-                                         role=kering.Roles.controller,
-                                         stamp=help.toIso8601(dt=dt)))
-            if "curls" in conf:
-                curls = conf["curls"]
-                for url in curls:
-                    splits = urlsplit(url)
-                    scheme = (splits.scheme if splits.scheme in kering.Schemes
-                              else kering.Schemes.http)
-                    msgs.extend(self.makeLocScheme(url=url,
-                                                   scheme=scheme,
-                                                   stamp=help.toIso8601(dt=dt)))
-            self.psr.parse(ims=msgs)
+        dt = help.fromIso8601(endage.dt)
+        msgs = bytearray()
+        msgs.extend(self.makeEndRole(eid=self.pre,
+                                     role=kering.Roles.controller,
+                                     stamp=help.toIso8601(dt=dt)))
+        for url in endage.curls:
+            splits = urlsplit(url)
+            scheme = (splits.scheme if splits.scheme in kering.Schemes
+                      else kering.Schemes.http)
+            msgs.extend(self.makeLocScheme(url=url,
+                                           scheme=scheme,
+                                           stamp=help.toIso8601(dt=dt)))
+        self.psr.parse(ims=msgs)
+
+    def reconfigure(self):
+        """Apply configuration from config source .cf to this Hab.
+        Parses raw config and applies own endpoint section if present.
+        """
+        raw = self.cf.get()
+        confitage = configing.parseConfig(raw)
+        endage = confitage.habs.get(self.name)
+        if endage is not None:
+            self.applyEndage(endage)
 
     @property
     def iserder(self):

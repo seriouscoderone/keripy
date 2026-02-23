@@ -400,5 +400,334 @@ def test_configer_doer():
 
 
 
+def test_sourcer_abc():
+    """Test Sourcer ABC and isinstance relationships."""
+    from keri.app.configing import Sourcer, FileConfiger, DictConfiger
+
+    # Cannot instantiate Sourcer directly
+    with pytest.raises(TypeError):
+        Sourcer()
+
+    # FileConfiger (file-based) is a Sourcer
+    cf = configing.FileConfiger(name="abc_test", temp=True, reopen=True)
+    assert isinstance(cf, Sourcer)
+    cf.close(clear=True)
+
+    # Configer alias resolves to FileConfiger
+    assert configing.Configer is FileConfiger
+
+    # DictConfiger (in-memory) is a Sourcer
+    dcf = DictConfiger(name="abc_test", temp=True)
+    assert isinstance(dcf, Sourcer)
+
+    # Both have the required interface
+    for obj in (dcf,):
+        assert hasattr(obj, 'get')
+        assert hasattr(obj, 'put')
+        assert hasattr(obj, 'opened')
+        assert hasattr(obj, 'name')
+        assert hasattr(obj, 'base')
+        assert hasattr(obj, 'temp')
+
+
+def test_dict_configer():
+    """Test DictConfiger in-memory implementation."""
+    from keri.app.configing import DictConfiger
+
+    # defaults
+    cf = DictConfiger()
+    assert cf.name == "conf"
+    assert cf.base == "main"
+    assert cf.temp is False
+    assert cf.opened is True
+    assert cf.path is None
+
+    # initially empty
+    assert cf.get() == {}
+
+    # put / get
+    data = {"dt": "2021-01-01T00:00:00.000000+00:00",
+            "iurls": ["tcp://localhost:5621/"]}
+    assert cf.put(data) is True
+    assert cf.get() == data
+
+    # get returns a copy
+    conf = cf.get()
+    conf["extra"] = True
+    assert "extra" not in cf.get()
+
+    # put stores a copy
+    data2 = {"new": "data"}
+    cf.put(data2)
+    data2["mutated"] = True
+    assert "mutated" not in cf.get()
+
+    # close / reopen
+    cf.close()
+    assert cf.opened is False
+    assert cf.reopen() is True
+    assert cf.opened is True
+    assert cf.get() == {"new": "data"}  # data persists in memory
+
+    # initial data
+    cf2 = DictConfiger(data={"key": "value"}, name="test", base="base", temp=True)
+    assert cf2.name == "test"
+    assert cf2.base == "base"
+    assert cf2.temp is True
+    assert cf2.get() == {"key": "value"}
+
+
+def test_dict_configer_with_habery():
+    """Test Habery accepts injected DictConfiger."""
+    from keri import core
+    from keri.app import habbing
+    from keri.app.configing import DictConfiger
+
+    salt = core.Salter(raw=b'0123456789abcdef').qb64
+    cf = DictConfiger(name="test", temp=True)
+
+    with habbing.openHby(name="test", temp=True, salt=salt, cf=cf) as hby:
+        assert hby.cf is cf
+        assert hby.cf.opened is True
+        assert hby.inited is True
+
+        hab = hby.makeHab("test")
+        assert hab is not None
+        assert hab.pre in hby.habs
+
+
+def test_endage():
+    """Test Endage dataclass construction and defaults."""
+    from keri.app.configing import Endage
+
+    # defaults
+    e = Endage()
+    assert e.dt == ''
+    assert e.curls == []
+
+    # with values
+    e = Endage(dt="2021-01-01T00:00:00.000000+00:00",
+               curls=["tcp://localhost:5621/"])
+    assert e.dt == "2021-01-01T00:00:00.000000+00:00"
+    assert e.curls == ["tcp://localhost:5621/"]
+
+
+def test_bootage():
+    """Test Bootage dataclass construction and defaults."""
+    from keri.app.configing import Bootage
+
+    # defaults
+    b = Bootage()
+    assert b.dt == ''
+    assert b.iurls == []
+    assert b.durls == []
+    assert b.wurls == []
+
+    # with values
+    b = Bootage(dt="2021-01-01T00:00:00.000000+00:00",
+                iurls=["tcp://localhost:5620/"],
+                durls=["http://127.0.0.1:7723/oobi/ABC"],
+                wurls=["http://127.0.0.1:5644/.well-known/keri/oobi/ABC"])
+    assert b.dt == "2021-01-01T00:00:00.000000+00:00"
+    assert len(b.iurls) == 1
+    assert len(b.durls) == 1
+    assert len(b.wurls) == 1
+
+
+def test_confitage():
+    """Test Confitage dataclass construction and defaults."""
+    from keri.app.configing import Confitage, Bootage, Endage
+
+    # defaults
+    c = Confitage()
+    assert isinstance(c.boot, Bootage)
+    assert c.boot.dt == ''
+    assert c.habs == {}
+    assert c.extra == {}
+
+    # with values
+    c = Confitage(
+        boot=Bootage(dt="2021-01-01T00:00:00.000000+00:00"),
+        habs={"nel": Endage(dt="2021-01-01T00:00:00.000000+00:00",
+                            curls=["tcp://localhost:5621/"])},
+        extra={"keria": {"curls": ["http://localhost:3902/"]}}
+    )
+    assert c.boot.dt == "2021-01-01T00:00:00.000000+00:00"
+    assert "nel" in c.habs
+    assert c.habs["nel"].curls == ["tcp://localhost:5621/"]
+    assert "keria" in c.extra
+
+
+def test_parseconfig_empty():
+    """Test parseConfig with empty input."""
+    from keri.app.configing import parseConfig, Confitage, Bootage
+
+    c = parseConfig({})
+    assert isinstance(c, Confitage)
+    assert isinstance(c.boot, Bootage)
+    assert c.boot.dt == ''
+    assert c.boot.iurls == []
+    assert c.habs == {}
+    assert c.extra == {}
+
+    c = parseConfig(None)
+    assert isinstance(c, Confitage)
+    assert c.habs == {}
+
+
+def test_parseconfig_global_only():
+    """Test parseConfig with global-only config (no hab sections)."""
+    from keri.app.configing import parseConfig
+
+    raw = {
+        "dt": "2021-01-01T00:00:00.000000+00:00",
+        "iurls": ["tcp://localhost:5620/?role=peer&name=tam"],
+        "durls": ["http://127.0.0.1:7723/oobi/ABC"],
+        "wurls": ["http://127.0.0.1:5644/.well-known/keri/oobi/ABC"],
+    }
+    c = parseConfig(raw)
+    assert c.boot.dt == "2021-01-01T00:00:00.000000+00:00"
+    assert c.boot.iurls == ["tcp://localhost:5620/?role=peer&name=tam"]
+    assert c.boot.durls == ["http://127.0.0.1:7723/oobi/ABC"]
+    assert c.boot.wurls == ["http://127.0.0.1:5644/.well-known/keri/oobi/ABC"]
+    assert c.habs == {}
+    assert c.extra == {}
+
+
+def test_parseconfig_legacy_flat():
+    """Test parseConfig with legacy flat format (hab sections at top level)."""
+    from keri.app.configing import parseConfig, Endage
+
+    raw = {
+        "dt": "2021-01-01T00:00:00.000000+00:00",
+        "nel": {
+            "dt": "2021-01-01T00:00:00.000000+00:00",
+            "curls": ["tcp://localhost:5621/"],
+        },
+        "iurls": ["tcp://localhost:5620/?role=peer&name=tam"],
+        "durls": [],
+        "wurls": [],
+    }
+    c = parseConfig(raw)
+    assert c.boot.dt == "2021-01-01T00:00:00.000000+00:00"
+    assert c.boot.iurls == ["tcp://localhost:5620/?role=peer&name=tam"]
+    assert "nel" in c.habs
+    assert isinstance(c.habs["nel"], Endage)
+    assert c.habs["nel"].dt == "2021-01-01T00:00:00.000000+00:00"
+    assert c.habs["nel"].curls == ["tcp://localhost:5621/"]
+
+
+def test_parseconfig_new_habs_format():
+    """Test parseConfig with new explicit 'habs' key format."""
+    from keri.app.configing import parseConfig, Endage
+
+    raw = {
+        "dt": "2021-01-01T00:00:00.000000+00:00",
+        "iurls": ["tcp://localhost:5620/"],
+        "habs": {
+            "nel": {
+                "dt": "2021-01-01T00:00:00.000000+00:00",
+                "curls": ["tcp://localhost:5621/"],
+            },
+            "wan": {
+                "dt": "2021-01-01T00:00:00.000000+00:00",
+                "curls": ["tcp://localhost:5622/"],
+            },
+        },
+    }
+    c = parseConfig(raw)
+    assert c.boot.dt == "2021-01-01T00:00:00.000000+00:00"
+    assert c.boot.iurls == ["tcp://localhost:5620/"]
+    assert len(c.habs) == 2
+    assert "nel" in c.habs and "wan" in c.habs
+    assert isinstance(c.habs["nel"], Endage)
+    assert c.habs["nel"].curls == ["tcp://localhost:5621/"]
+    assert c.habs["wan"].curls == ["tcp://localhost:5622/"]
+
+
+def test_parseconfig_extra_keys():
+    """Test parseConfig with extra keys (keria pattern)."""
+    from keri.app.configing import parseConfig
+
+    # Legacy format: non-hab dict without 'curls' goes to extra
+    raw = {
+        "dt": "2021-01-01T00:00:00.000000+00:00",
+        "iurls": [],
+        "keria": {
+            "curls": ["http://localhost:3902/"],
+        },
+        "other_key": "some_value",
+    }
+    c = parseConfig(raw)
+    # keria has curls so is treated as hab in legacy mode
+    assert "keria" in c.habs
+    assert "other_key" in c.extra
+
+    # New format: extra keys preserved
+    raw2 = {
+        "dt": "2021-01-01T00:00:00.000000+00:00",
+        "habs": {},
+        "keria": {"curls": ["http://localhost:3902/"]},
+    }
+    c2 = parseConfig(raw2)
+    assert "keria" in c2.extra
+    assert c2.habs == {}
+
+
+def test_parseconfig_backward_compat():
+    """Test that both formats produce equivalent Confitage for same data."""
+    from keri.app.configing import parseConfig
+
+    # Legacy format
+    legacy = {
+        "dt": "2021-01-01T00:00:00.000000+00:00",
+        "iurls": ["tcp://localhost:5620/"],
+        "durls": [],
+        "wurls": [],
+        "nel": {
+            "dt": "2021-01-01T00:00:00.000000+00:00",
+            "curls": ["tcp://localhost:5621/"],
+        },
+    }
+    # New format
+    new = {
+        "dt": "2021-01-01T00:00:00.000000+00:00",
+        "iurls": ["tcp://localhost:5620/"],
+        "durls": [],
+        "wurls": [],
+        "habs": {
+            "nel": {
+                "dt": "2021-01-01T00:00:00.000000+00:00",
+                "curls": ["tcp://localhost:5621/"],
+            },
+        },
+    }
+    cl = parseConfig(legacy)
+    cn = parseConfig(new)
+    assert cl.boot == cn.boot
+    assert cl.habs == cn.habs
+
+
+def test_parseconfig_integration_dictconfiger():
+    """Integration: DictConfiger -> parseConfig -> Confitage."""
+    from keri.app.configing import DictConfiger, parseConfig, Endage
+
+    raw = {
+        "dt": "2021-01-01T00:00:00.000000+00:00",
+        "iurls": ["tcp://localhost:5620/"],
+        "nel": {
+            "dt": "2021-01-01T00:00:00.000000+00:00",
+            "curls": ["tcp://localhost:5621/"],
+        },
+    }
+    cf = DictConfiger(data=raw)
+    c = parseConfig(cf.get())
+    assert c.boot.dt == "2021-01-01T00:00:00.000000+00:00"
+    assert c.boot.iurls == ["tcp://localhost:5620/"]
+    assert "nel" in c.habs
+    assert isinstance(c.habs["nel"], Endage)
+    assert c.habs["nel"].curls == ["tcp://localhost:5621/"]
+
+
 if __name__ == "__main__":
     test_configer()
