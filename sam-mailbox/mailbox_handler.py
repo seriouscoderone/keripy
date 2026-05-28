@@ -84,6 +84,37 @@ def _unwrap_attachment_group(attachment):
     return attachment
 
 
+def _format_sse_events(hby, pre, topics):
+    """Walk Mailboxer for each requested topic; format as SSE events.
+
+    Args:
+        hby: Habery (uses hby.db.cloneTopicIter)
+        pre (str): recipient AID; topic keys in db.tpcs are pre+topic
+        topics (dict): {topic_name: last_seen_ordinal}
+
+    Returns:
+        str: SSE-framed body. Empty string when no new messages on any topic.
+
+    Topic key construction mirrors keri/app/forwarding.py:500 exactly:
+        f"{recipient}/{topic}".encode("utf-8").
+    """
+    out = []
+    pre_str = pre.decode("utf-8") if isinstance(pre, (bytes, bytearray)) else pre
+    for name, last_on in topics.items():
+        topic_key = f"{pre_str}/{name}".encode("utf-8")
+        try:
+            for on, _topic, msg in hby.db.cloneTopicIter(topic=topic_key,
+                                                        fn=int(last_on) + 1):
+                msg_text = bytes(msg).decode("utf-8")
+                out.append(
+                    f"id: {on}\nevent: {name}\nretry: 1000\ndata: {msg_text}\n\n"
+                )
+        except Exception as exc:
+            logger.warning("cloneTopicIter failed for pre=%s topic=%s: %s",
+                           pre, name, exc, exc_info=True)
+    return "".join(out)
+
+
 def _detect_mbx_query(ims):
     """Peek at the first message in ims; return its serder if it's a `qry`
     with r='/mbx' (or 'mbx' — accept both), else None.

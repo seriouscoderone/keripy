@@ -120,3 +120,48 @@ def test_detect_mbx_query_returns_serder_for_mbx_qry():
     )
     assert _detect_mbx_query(qry_serder.raw) is not None
     assert _detect_mbx_query(qry_serder.raw).ked["r"] in ("/mbx", "mbx")
+
+
+# ---------------------------------------------------------------------------
+# Task 2.4: _format_sse_events helper
+# ---------------------------------------------------------------------------
+
+def test_format_sse_events_empty_topics_returns_empty():
+    from mailbox_handler import _format_sse_events
+    hby = MagicMock()
+    hby.db.cloneTopicIter = MagicMock(return_value=iter([]))
+    out = _format_sse_events(hby, "BFake_recipient", {"receipt": 0})
+    assert out == ""
+
+
+def test_format_sse_events_emits_sse_frame_per_message():
+    from mailbox_handler import _format_sse_events
+    hby = MagicMock()
+    hby.db.cloneTopicIter = MagicMock(
+        return_value=iter([(0, b"topic1", b"message-one"),
+                          (1, b"topic1", b"message-two")])
+    )
+    out = _format_sse_events(hby, "BFake_recipient", {"credential": 0})
+    # Two events emitted
+    assert out.count("data: ") == 2
+    assert "id: 0" in out
+    assert "id: 1" in out
+    assert "event: credential" in out
+    assert "retry: 1000" in out
+    assert "message-one" in out
+    assert "message-two" in out
+
+
+def test_format_sse_events_topic_key_construction():
+    """Topic key is f'{pre}/{name}'.encode() — matches forwarding.py:500."""
+    from mailbox_handler import _format_sse_events
+    hby = MagicMock()
+    captured = {}
+    def fake_iter(topic, fn):
+        captured["topic"] = topic
+        captured["fn"] = fn
+        return iter([])
+    hby.db.cloneTopicIter = fake_iter
+    _format_sse_events(hby, "BAlice", {"credential": 5})
+    assert captured["topic"] == b"BAlice/credential"
+    assert captured["fn"] == 6  # last_on + 1
