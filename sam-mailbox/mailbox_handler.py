@@ -182,8 +182,11 @@ class OOBIResource:
         resp.status = falcon.HTTP_200
 
 
-class StatusResource:
-    """GET / — return mailbox status and identifier."""
+class RootResource:
+    """Handles all methods on /:
+      - GET: mailbox status
+      - POST/PUT: CESR ingest (deposit or buffered mbx-query)
+    """
 
     async def on_get(self, req, resp):
         resp.media = {
@@ -194,6 +197,61 @@ class StatusResource:
         }
         resp.status = falcon.HTTP_200
 
+    async def on_post(self, req, resp):
+        await self._ingest(req, resp)
+
+    async def on_put(self, req, resp):
+        await self._ingest(req, resp)
+
+    async def _ingest(self, req, resp):
+        """POST / -- ingest CESR (/fwd exn deposit or qry r=/mbx poll).
+
+        Two response paths:
+          - Normal /fwd exn deposits: 204 (event routed to ForwardHandler via Exchanger).
+          - qry r=/mbx: 200 + Content-Type: text/event-stream (buffered).
+
+        (True streaming long-poll is added in Task 2.7.)
+        """
+        body = await req.bounded_stream.read()
+        # Build a synthetic event dict so we can reuse _extract_cesr_stream
+        # which expects Lambda-style {body, headers}.
+        synthetic_event = {
+            "body": body,
+            "headers": {k: v for k, v in req.headers.items()},
+        }
+        ims = _extract_cesr_stream(synthetic_event)
+        if not ims:
+            resp.media = {"error": "empty body"}
+            resp.status = falcon.HTTP_400
+            return
+
+        # Peek for mbx query before consuming ims via psr.parse.
+        mbx_serder = _detect_mbx_query(ims)
+
+        # framed=True: one HTTP POST = one message + counted attachments
+        # (streamCESRRequests contract). Without it, -V/-C wrapped attachments
+        # that claim more quadlets than present hang the parser.
+        _hby.psr.parse(ims=ims, framed=True)
+        _hby.kvy.processEscrows()
+
+        if mbx_serder is not None:
+            q = mbx_serder.ked.get("q") or {}
+            pre = q.get("pre")
+            topics = q.get("topics") or {}
+            if not isinstance(pre, str) or not pre or not isinstance(topics, dict):
+                resp.media = {"error": "qry/mbx requires q.pre (str) and q.topics (dict)"}
+                resp.status = falcon.HTTP_400
+                return
+            body_text = _format_sse_events(_hby, pre, topics)
+            resp.content_type = "text/event-stream"
+            resp.set_header("Cache-Control", "no-cache")
+            resp.set_header("Connection", "close")
+            resp.text = body_text
+            resp.status = falcon.HTTP_200
+            return
+
+        resp.status = falcon.HTTP_204
+
 
 def build_app():
     """Build the Falcon ASGI app with all routes wired.
@@ -201,11 +259,11 @@ def build_app():
     Called by bootstrap.py at uvicorn startup. Does NOT call init() — that
     is deferred until the first request hits a route that needs the Habery
     (LWA's readiness probe path /status, configured in template.yaml, hits
-    StatusResource which DOES need _hab populated; for now this is left as
+    RootResource which DOES need _hab populated; for now this is left as
     a known issue resolved in Task 2.8 when init() lands).
     """
     app = falcon.asgi.App()
-    app.add_route("/", StatusResource())
+    app.add_route("/", RootResource())
 
     oobi = OOBIResource()
     app.add_route("/oobi", oobi)

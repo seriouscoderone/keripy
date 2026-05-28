@@ -220,3 +220,81 @@ def test_oobi_bare_path_defaults_to_self():
         client = testing.TestClient(build_app())
         result = client.simulate_get("/oobi")
     assert result.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Task 2.6: IngestResource (POST / and PUT /)
+# ---------------------------------------------------------------------------
+
+def test_ingest_empty_body_returns_400():
+    """POST / with empty body returns 400."""
+    from mailbox_handler import build_app
+    with patch("mailbox_handler._hby") as mock_hby:
+        mock_hby.psr.parse = MagicMock()
+        mock_hby.kvy.processEscrows = MagicMock()
+        client = testing.TestClient(build_app())
+        result = client.simulate_post("/", body="")
+    assert result.status_code == 400
+
+
+def test_ingest_deposit_returns_204():
+    """A /fwd exn (no mbx query) returns 204 — empty body, no Content-Type."""
+    from mailbox_handler import build_app
+    with patch("mailbox_handler._hby") as mock_hby, \
+         patch("mailbox_handler._detect_mbx_query", return_value=None):
+        mock_hby.psr.parse = MagicMock()
+        mock_hby.kvy.processEscrows = MagicMock()
+        client = testing.TestClient(build_app())
+        result = client.simulate_post("/", body=b"FAKE_CESR",
+                                     headers={"Content-Type": "application/cesr"})
+    assert result.status_code == 204
+
+
+def test_ingest_mbx_qry_returns_sse_buffered():
+    """A qry r=/mbx returns 200 + Content-Type: text/event-stream (buffered drain)."""
+    from mailbox_handler import build_app
+    fake_serder = MagicMock()
+    fake_serder.ked = {
+        "t": "qry", "r": "/mbx",
+        "q": {"pre": "BRecipient", "topics": {"receipt": 0}}
+    }
+    sse_body = "id: 0\nevent: receipt\nretry: 1000\ndata: msg\n\n"
+    with patch("mailbox_handler._hby") as mock_hby, \
+         patch("mailbox_handler._detect_mbx_query", return_value=fake_serder), \
+         patch("mailbox_handler._format_sse_events", return_value=sse_body):
+        mock_hby.psr.parse = MagicMock()
+        mock_hby.kvy.processEscrows = MagicMock()
+        client = testing.TestClient(build_app())
+        result = client.simulate_post("/", body=b"FAKE_CESR",
+                                     headers={"Content-Type": "application/cesr"})
+    assert result.status_code == 200
+    assert result.headers.get("Content-Type") == "text/event-stream"
+    assert "data: msg" in result.text
+
+
+def test_ingest_mbx_qry_missing_pre_returns_400():
+    """qry r=/mbx without q.pre returns 400."""
+    from mailbox_handler import build_app
+    fake_serder = MagicMock()
+    fake_serder.ked = {"t": "qry", "r": "/mbx", "q": {"topics": {"receipt": 0}}}
+    with patch("mailbox_handler._hby") as mock_hby, \
+         patch("mailbox_handler._detect_mbx_query", return_value=fake_serder):
+        mock_hby.psr.parse = MagicMock()
+        mock_hby.kvy.processEscrows = MagicMock()
+        client = testing.TestClient(build_app())
+        result = client.simulate_post("/", body=b"FAKE_CESR",
+                                     headers={"Content-Type": "application/cesr"})
+    assert result.status_code == 400
+
+
+def test_put_root_also_ingests():
+    """PUT / dispatches to the same ingest path as POST /."""
+    from mailbox_handler import build_app
+    with patch("mailbox_handler._hby") as mock_hby, \
+         patch("mailbox_handler._detect_mbx_query", return_value=None):
+        mock_hby.psr.parse = MagicMock()
+        mock_hby.kvy.processEscrows = MagicMock()
+        client = testing.TestClient(build_app())
+        result = client.simulate_put("/", body=b"FAKE_CESR",
+                                    headers={"Content-Type": "application/cesr"})
+    assert result.status_code == 204
