@@ -84,6 +84,23 @@ def _unwrap_attachment_group(attachment):
     return attachment
 
 
+def _detect_mbx_query(ims):
+    """Peek at the first message in ims; return its serder if it's a `qry`
+    with r='/mbx' (or 'mbx' — accept both), else None.
+
+    Returns None on parse error so the caller falls back to the default
+    deposit path.
+    """
+    from keri.core import serdering
+    try:
+        serder = serdering.SerderKERI(raw=bytes(ims))
+    except Exception:
+        return None
+    if serder.ked.get("t") == "qry" and serder.ked.get("r") in ("/mbx", "mbx"):
+        return serder
+    return None
+
+
 class StatusResource:
     """GET / — return mailbox status and identifier."""
 

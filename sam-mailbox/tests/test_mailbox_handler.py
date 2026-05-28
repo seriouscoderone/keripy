@@ -84,3 +84,39 @@ def test_extract_cesr_stream_case_insensitive_header():
     from mailbox_handler import _extract_cesr_stream
     event = {"body": "EVENT", "headers": {"cesr-attachment": "-AABSIG"}}
     assert bytes(_extract_cesr_stream(event)) == b"EVENT-AABSIG"
+
+
+# ---------------------------------------------------------------------------
+# Task 2.3: _detect_mbx_query helper
+# ---------------------------------------------------------------------------
+
+def test_detect_mbx_query_returns_none_for_malformed():
+    from mailbox_handler import _detect_mbx_query
+    assert _detect_mbx_query(b"not a serder") is None
+    assert _detect_mbx_query(b"") is None
+
+
+def test_detect_mbx_query_returns_none_for_non_qry():
+    """An icp event should not be detected as an mbx query."""
+    from mailbox_handler import _detect_mbx_query
+    hby = Habery(name="t", temp=True, salt=Salter().qb64)
+    hab = hby.makeHab(name="alice", transferable=False)
+    icp_msg = hab.msgOwnEvent(sn=0)
+    # Extract just the serder portion (before -AAB attachments)
+    icp_serder_bytes = icp_msg.split(b"-A", 1)[0]
+    try:
+        assert _detect_mbx_query(icp_serder_bytes) is None
+    finally:
+        hby.close()
+
+
+def test_detect_mbx_query_returns_serder_for_mbx_qry():
+    """A qry serder with r=/mbx should be detected."""
+    from mailbox_handler import _detect_mbx_query
+    # Construct a minimal qry serder ourselves
+    qry_serder = eventing.query(
+        route="/mbx",
+        query={"pre": "BFake_recipient", "topics": {"receipt": 0}}
+    )
+    assert _detect_mbx_query(qry_serder.raw) is not None
+    assert _detect_mbx_query(qry_serder.raw).ked["r"] in ("/mbx", "mbx")
