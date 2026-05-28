@@ -4,11 +4,19 @@ import json
 from unittest.mock import patch, MagicMock
 
 import falcon
+import pytest
 from falcon import testing
 
 from keri.app.habbing import Habery
 from keri.core.signing import Salter
 from keri.core import eventing
+
+
+@pytest.fixture(autouse=True)
+def mock_init(monkeypatch):
+    """Skip real init() in unit tests — they patch _hab/_hby directly."""
+    monkeypatch.setattr("mailbox_handler.init", lambda: None)
+    yield
 
 
 def test_build_app_returns_falcon_asgi_app():
@@ -314,7 +322,6 @@ def test_put_root_also_ingests():
 # ---------------------------------------------------------------------------
 
 import asyncio as _asyncio_for_tests
-import pytest
 
 
 @pytest.mark.asyncio
@@ -387,3 +394,30 @@ async def test_stream_mbx_response_advances_cursor_across_polls():
     body = b"".join(frames)
     assert b"data: late-arrival" in body
     assert b"id: 5" in body
+
+
+# ---------------------------------------------------------------------------
+# Task 2.8: init() cold-start validation
+# ---------------------------------------------------------------------------
+
+def test_init_requires_mailbox_salt(monkeypatch):
+    """init() must raise if MAILBOX_SALT is missing — never mint a non-recoverable AID."""
+    import mailbox_handler
+    import importlib
+
+    # Re-import to get the original (un-mocked) init function.
+    # The autouse fixture mocked mailbox_handler.init, but we can reload
+    # the module in-process and grab the real function from a fresh import.
+    fresh = importlib.import_module("mailbox_handler")
+    # importlib.reload returns the same module object in-process; the autouse
+    # fixture has already replaced fresh.init. Instead, import the real function
+    # from source by directly referencing the module attribute before the mock
+    # runs — but since autouse has already run, we instead call the function
+    # object from the module's __dict__ under its original name by undoing the
+    # monkeypatch for 'mailbox_handler.init' and then setting _initialized=False.
+    monkeypatch.undo()  # undo ALL monkeypatches so far, including autouse mock
+    monkeypatch.delenv("MAILBOX_SALT", raising=False)
+    monkeypatch.setattr(mailbox_handler, "_initialized", False)
+    with pytest.raises(RuntimeError) as exc_info:
+        mailbox_handler.init()
+    assert "MAILBOX_SALT" in str(exc_info.value)

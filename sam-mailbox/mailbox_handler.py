@@ -26,12 +26,199 @@ _parser = None
 _initialized = False
 
 
-def init():
-    """Cold-start: set up Habery with DynamoDB backends, mailbox Hab, etc.
+def _clear_keeper(ks):
+    """Remove all data from keeper stores so Habery init can start fresh.
 
-    Implemented incrementally in later tasks (Task 2.8).
+    Needed when a previous init attempt partially succeeded (wrote key
+    material to the keeper) but failed before the Baser's signatory record
+    was written, leaving the two databases out of sync.
     """
-    raise NotImplementedError("init() implemented in Task 2.8")
+    for store_name in list(ks._stores):
+        try:
+            ks._clear_store(store_name)
+        except Exception:
+            pass
+
+
+def _ensure_witness_receipt(witness_aid, witness_url):
+    """If db.wigs has no receipt for our own kever, do a one-time witness
+    round-trip:
+      1. Resolve witness OOBI to ingest witness KEL (if not already known).
+      2. POST our inception event to witness /receipts.
+      3. Parse the receipt response -> lands in db.wigs.
+
+    Raises if witness is unreachable or receipt is invalid. No partial state
+    is written; the next cold-start retries cleanly.
+    """
+    import urllib.request
+
+    kever = _hab.kever
+    pre_b = _hab.pre.encode("utf-8")
+    said_b = kever.serder.saidb
+
+    if _hby.db.wigs.get(keys=(pre_b, said_b)):
+        return  # already receipted
+
+    if witness_aid not in _hby.kevers:
+        oobi_url = f"{witness_url}/oobi/{witness_aid}/controller"
+        logger.info("fetching witness OOBI %s", oobi_url)
+        with urllib.request.urlopen(oobi_url, timeout=10) as r:
+            kel_bytes = r.read()
+        _hby.psr.parse(ims=bytearray(kel_bytes))
+        if witness_aid not in _hby.kevers:
+            raise RuntimeError(
+                f"witness OOBI parse did not yield kever for {witness_aid}"
+            )
+
+    # NOTE: keripy v2 method is msgOwnEvent (NOT makeOwnEvent).
+    icp_msg = _hab.msgOwnEvent(sn=0)
+    receipts_url = f"{witness_url}/receipts"
+    logger.info("posting inception to %s for receipt", receipts_url)
+    req = urllib.request.Request(
+        receipts_url, data=bytes(icp_msg),
+        headers={"Content-Type": "application/cesr"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=10) as r:
+        receipt_bytes = r.read()
+    _hby.psr.parse(ims=bytearray(receipt_bytes))
+
+    if not _hby.db.fullyWitnessed(_hab.kever.serder):
+        raise RuntimeError("witness round-trip did not yield a valid receipt")
+
+
+def _publish_self_endpoints():
+    """Publish signed rpy messages advertising the mailbox's own OOBI surface:
+    /end/role/add for controller + mailbox roles, /loc/scheme for the
+    mailbox URL. BADA monotonicity via nowIso8601 means re-running on every
+    cold start is safe.
+    """
+    from keri.kering import Roles, Schemes
+    from keri.help import helping
+
+    mailbox_url = os.environ.get("MAILBOX_URL", "").strip()
+    if not mailbox_url:
+        logger.warning("MAILBOX_URL not set; OOBI responses will lack /loc/scheme")
+        return
+
+    scheme = Schemes.https if mailbox_url.startswith("https://") else Schemes.http
+    stamp = helping.nowIso8601()
+    msgs = bytearray()
+    msgs.extend(_hab.makeEndRole(eid=_hab.pre, role=Roles.controller, stamp=stamp))
+    msgs.extend(_hab.makeEndRole(eid=_hab.pre, role=Roles.mailbox, stamp=stamp))
+    msgs.extend(_hab.makeLocScheme(url=mailbox_url, scheme=scheme, stamp=stamp))
+    try:
+        _hby.psr.parse(ims=msgs)
+    except Exception as exc:
+        logger.warning("failed to register self-endpoints: %s", exc)
+
+
+def init():
+    """Cold-start: set up Habery with DynamoDB, create/load mailbox Hab,
+    do one-time witness round-trip on fresh inception, publish self-OOBI rpy,
+    register ForwardHandler.
+
+    Called by build_app() at uvicorn startup. Sets module globals _hby,
+    _hab, _parser, _initialized.
+    """
+    global _hby, _hab, _parser, _initialized
+    if _initialized:
+        return
+
+    from keri.db.dynamodbing import DynamoDBer
+    from keri.app.lambding import (
+        BASER_STORES, KEEPER_STORES, MAILBOXER_STORES,
+        setup_baser, setup_keeper, setup_mailboxer,
+    )
+    from keri.app.habbing import Habery
+    from keri.app.configing import Configer
+
+    name = os.environ.get("MAILBOX_NAME", "mailbox")
+    alias = os.environ.get("MAILBOX_ALIAS", "mailbox")
+    salt = os.environ.get("MAILBOX_SALT")
+    region = os.environ.get("MAILBOX_REGION", "us-east-1")
+    endpoint_url = os.environ.get("MAILBOX_ENDPOINT_URL")
+    baser_table = os.environ.get("MAILBOX_BASER_TABLE") or f"{name}-db"
+    keeper_table = os.environ.get("MAILBOX_KEEPER_TABLE") or f"{name}-ks"
+    witness_aid = os.environ.get("WITNESS_AID")
+    witness_url = (os.environ.get("WITNESS_URL", "") or "").rstrip("/")
+
+    if not salt:
+        raise RuntimeError(
+            "MAILBOX_SALT env var is required — refusing to mint a "
+            "non-recoverable AID with a fresh salt"
+        )
+    if not witness_aid or not witness_url:
+        raise RuntimeError("WITNESS_AID and WITNESS_URL env vars are required")
+
+    kwa = dict(region=region)
+    if endpoint_url:
+        kwa["endpoint_url"] = endpoint_url
+        import boto3
+        kwa["session"] = boto3.Session(
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            region_name=region,
+        )
+
+    # Baser + Mailboxer share a table (non-overlapping subkeys)
+    baser_and_mbx_stores = list(set(BASER_STORES + MAILBOXER_STORES))
+    db = DynamoDBer.open(name=name, stores=baser_and_mbx_stores,
+                         table_name=baser_table, **kwa)
+    setup_baser(db)
+    setup_mailboxer(db)
+
+    ks = DynamoDBer.open(name=f"{name}-ks", stores=KEEPER_STORES,
+                         table_name=keeper_table, **kwa)
+    setup_keeper(ks)
+
+    # Detect partial-init state and recover
+    _pidx_raw = ks.gbls.get("pidx")
+    _signatory_pre = db.hbys.get("__signatory__")
+    if _pidx_raw is not None and _signatory_pre is None:
+        logger.warning("Detected partial init state (pidx=%s but no signatory). "
+                       "Clearing keeper for clean restart.", _pidx_raw)
+        _clear_keeper(ks)
+        setup_keeper(ks)
+
+    cf = Configer(name=name, temp=True)  # Lambda only writes to /tmp
+
+    try:
+        _hby = Habery(name=name, temp=False, free=True, db=db, ks=ks, cf=cf, salt=salt)
+    except Exception as exc:
+        if "Already incepted" in str(exc):
+            logger.warning("Habery init hit 'Already incepted' (%s). "
+                           "Clearing keeper and retrying.", exc)
+            _clear_keeper(ks)
+            setup_keeper(ks)
+            _hby = Habery(name=name, temp=False, free=True, db=db, ks=ks, cf=cf, salt=salt)
+        else:
+            raise
+
+    # Get or create mailbox Hab — witnessed by witness.keri.host
+    _hab = _hby.habByName(alias)
+    if _hab is None:
+        _hab = _hby.makeHab(
+            name=alias, transferable=False,
+            isith='1', icount=1, ncount=0, nsith='0',
+            wits=[witness_aid], toad=1,
+        )
+
+    _hby.prefixes.add(_hab.pre)
+
+    # One-time witness round-trip on fresh inception
+    _ensure_witness_receipt(witness_aid=witness_aid, witness_url=witness_url)
+
+    # Publish self-rpy (controller + mailbox roles)
+    _publish_self_endpoints()
+
+    # Register ForwardHandler so /fwd exn messages route to mbx.storeMsg
+    from keri.app.forwarding import ForwardHandler
+    _hby.exc.addHandler(ForwardHandler(hby=_hby, mbx=_hby.db))
+
+    _parser = _hby.psr
+    _initialized = True
+    return _hby, _hab
 
 
 def get_body_bytes(event):
@@ -307,14 +494,10 @@ class RootResource:
 
 
 def build_app():
-    """Build the Falcon ASGI app with all routes wired.
-
-    Called by bootstrap.py at uvicorn startup. Does NOT call init() — that
-    is deferred until the first request hits a route that needs the Habery
-    (LWA's readiness probe path /status, configured in template.yaml, hits
-    RootResource which DOES need _hab populated; for now this is left as
-    a known issue resolved in Task 2.8 when init() lands).
+    """Build the Falcon ASGI app. Calls init() so module globals _hby/_hab
+    are populated before the first request lands.
     """
+    init()
     app = falcon.asgi.App()
     app.add_route("/", RootResource())
 
