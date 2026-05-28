@@ -12,13 +12,10 @@ Globals:
     MemorySize: 1024
     Architectures:
       - arm64
-  Api:
-    OpenApiVersion: 3.0.1  # suppresses SAM's extra implicit Stage resource
-    EndpointConfiguration:
-      Type: REGIONAL        # REQUIRED — Edge-optimized caps idle at 30s
-    BinaryMediaTypes:
-      - application/cesr
-      - "*/*"
+  # Globals.Api dropped — we use explicit AWS::ApiGateway::RestApi
+  # (MailboxApi) rather than AWS::Serverless::Api, so SAM's Globals.Api
+  # section no longer applies. REGIONAL endpoint and BinaryMediaTypes
+  # are set directly on MailboxApi.
 
 Parameters:
   MailboxName:
@@ -116,61 +113,92 @@ Resources:
             ProjectionType: ALL
 
   # -----------------------------------------------------------------------
-  # API Gateway (Approach A: SAM implicit via Events: + DefinitionBody
-  # OpenAPI override to swap the integration URI to
-  # /response-streaming-invocations at API version 2021-11-15).
+  # API Gateway — explicit resources (Approach B from Phase 0).
+  #
+  # The OpenAPI DefinitionBody path (Approach A) does not support the
+  # responseTransferMode property in x-amazon-apigateway-integration —
+  # API GW rejected "responseTransferMode: STREAMING" as "Invalid
+  # ResponseTransferMode specified" during the first deploy attempt.
+  #
+  # Explicit AWS::ApiGateway::Method.Integration.ResponseTransferMode
+  # is the only currently-working path for response-streaming REST APIs.
   # -----------------------------------------------------------------------
 
   MailboxApi:
-    Type: AWS::Serverless::Api
+    Type: AWS::ApiGateway::RestApi
     Properties:
-      StageName: Prod
+      Name: !Sub "${MailboxName}-api"
       EndpointConfiguration:
-        Type: REGIONAL
-      # The DefinitionBody overrides SAM's default buffered integration URI
-      # with the streaming variant.  SAM still auto-generates Deployment,
-      # Stage, and Lambda::Permission resources from the Events: block on
-      # MailboxFunction — we are only overriding the x-amazon-apigateway-
-      # integration URI here.
-      #
-      # Two catch-all paths cover every route the Falcon app serves:
-      #   /          — root (POST, PUT, GET for CESR ingest and status)
-      #   /{proxy+}  — all sub-paths (/oobi/..., /receipts, etc.)
-      #
-      # The streaming URI suffix is /response-streaming-invocations and the
-      # API version is 2021-11-15 (NOT /invocations at 2015-03-31).
-      DefinitionBody:
-        openapi: 3.0.1
-        info:
-          title: mailbox-api
-          version: "1.0"
-        paths:
-          /:
-            x-amazon-apigateway-any-method:
-              x-amazon-apigateway-integration:
-                type: aws_proxy
-                httpMethod: POST
-                uri:
-                  Fn::Sub: >-
-                    arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2021-11-15/functions/${MailboxFunction.Arn}/response-streaming-invocations
-                responseTransferMode: STREAMING
-                passthroughBehavior: when_no_match
-          /{proxy+}:
-            x-amazon-apigateway-any-method:
-              parameters:
-                - name: proxy
-                  in: path
-                  required: true
-                  schema:
-                    type: string
-              x-amazon-apigateway-integration:
-                type: aws_proxy
-                httpMethod: POST
-                uri:
-                  Fn::Sub: >-
-                    arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2021-11-15/functions/${MailboxFunction.Arn}/response-streaming-invocations
-                responseTransferMode: STREAMING
-                passthroughBehavior: when_no_match
+        Types:
+          - REGIONAL
+      BinaryMediaTypes:
+        - application/cesr
+        - "*/*"
+
+  # /{proxy+} catch-all (root resource is implicit on the RestApi)
+  MailboxProxyResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref MailboxApi
+      ParentId: !GetAtt MailboxApi.RootResourceId
+      PathPart: "{proxy+}"
+
+  # ANY method on root — streaming aws_proxy integration
+  MailboxRootMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref MailboxApi
+      ResourceId: !GetAtt MailboxApi.RootResourceId
+      HttpMethod: ANY
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2021-11-15/functions/${MailboxFunction.Arn}/response-streaming-invocations"
+        # CRITICAL: must be STREAMING when the URI is /response-streaming-invocations.
+        ResponseTransferMode: STREAM
+        PassthroughBehavior: WHEN_NO_MATCH
+
+  # ANY method on /{proxy+} — same streaming integration
+  MailboxProxyMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref MailboxApi
+      ResourceId: !Ref MailboxProxyResource
+      HttpMethod: ANY
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2021-11-15/functions/${MailboxFunction.Arn}/response-streaming-invocations"
+        ResponseTransferMode: STREAM
+        PassthroughBehavior: WHEN_NO_MATCH
+
+  # Deployment — depends on the methods so CFN orders correctly
+  MailboxApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - MailboxRootMethod
+      - MailboxProxyMethod
+    Properties:
+      RestApiId: !Ref MailboxApi
+
+  # Stage — explicit Prod stage
+  MailboxApiStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref MailboxApi
+      DeploymentId: !Ref MailboxApiDeployment
+      StageName: Prod
+
+  # Lambda invoke permission for the API GW stage
+  MailboxFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref MailboxFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${MailboxApi}/*/*/*"
 
   # -----------------------------------------------------------------------
   # Lambda function (ARM64 container image, LWA streaming)
@@ -213,52 +241,9 @@ Resources:
             TableName: !Ref MailboxBaserTable
         - DynamoDBCrudPolicy:
             TableName: !Ref MailboxKeeperTable
-      # Events: causes SAM to auto-generate Deployment + Stage + Permission
-      # against MailboxApi.  We enumerate every path/method the Falcon app
-      # serves explicitly so SAM generates the invoke permissions correctly.
-      Events:
-        PostRoot:
-          Type: Api
-          Properties:
-            RestApiId: !Ref MailboxApi
-            Path: /
-            Method: post
-        PutRoot:
-          Type: Api
-          Properties:
-            RestApiId: !Ref MailboxApi
-            Path: /
-            Method: put
-        GetRoot:
-          Type: Api
-          Properties:
-            RestApiId: !Ref MailboxApi
-            Path: /
-            Method: get
-        GetOobi:
-          Type: Api
-          Properties:
-            RestApiId: !Ref MailboxApi
-            Path: /oobi
-            Method: get
-        GetOobiAid:
-          Type: Api
-          Properties:
-            RestApiId: !Ref MailboxApi
-            Path: /oobi/{aid}
-            Method: get
-        GetOobiRole:
-          Type: Api
-          Properties:
-            RestApiId: !Ref MailboxApi
-            Path: /oobi/{aid}/{role}
-            Method: get
-        GetOobiEid:
-          Type: Api
-          Properties:
-            RestApiId: !Ref MailboxApi
-            Path: /oobi/{aid}/{role}/{eid}
-            Method: get
+      # No Events: block — API GW routes are wired via explicit
+      # MailboxRootMethod and MailboxProxyMethod resources above, and
+      # invoke permission is granted via MailboxFunctionPermission.
     Metadata:
       Dockerfile: sam-mailbox/Dockerfile
       DockerContext: ../
@@ -288,10 +273,11 @@ Resources:
         Types:
           - REGIONAL
 
-  # Base path mapping: ties the custom domain to the explicit MailboxApi
-  # resource (not the implicit ServerlessRestApi).
+  # Base path mapping: ties the custom domain to MailboxApi/Prod.
   MailboxBasePathMapping:
     Type: AWS::ApiGateway::BasePathMapping
+    DependsOn:
+      - MailboxApiStage
     Properties:
       DomainName: !Ref MailboxApiDomainName
       RestApiId: !Ref MailboxApi
