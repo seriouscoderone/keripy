@@ -153,6 +153,7 @@ Resources:
                 uri:
                   Fn::Sub: >-
                     arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2021-11-15/functions/${MailboxFunction.Arn}/response-streaming-invocations
+                responseTransferMode: STREAMING
                 passthroughBehavior: when_no_match
           /{proxy+}:
             x-amazon-apigateway-any-method:
@@ -168,6 +169,7 @@ Resources:
                 uri:
                   Fn::Sub: >-
                     arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2021-11-15/functions/${MailboxFunction.Arn}/response-streaming-invocations
+                responseTransferMode: STREAMING
                 passthroughBehavior: when_no_match
 
   # -----------------------------------------------------------------------
