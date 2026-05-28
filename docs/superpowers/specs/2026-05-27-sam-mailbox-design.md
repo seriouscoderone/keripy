@@ -85,11 +85,11 @@ below).
 sam-mailbox/
 ├── template.yaml          # SAM stack: DynamoDB, Lambda (streaming), API GW, ACM, Route53
 ├── samconfig.toml         # stack_name=serverless-mailbox, region=us-east-1, profile=personal
-├── Dockerfile             # python:3.14-slim + libsodium + awslambdaric
+├── Dockerfile             # python:3.14-slim + libsodium + AWS Lambda Web Adapter + uvicorn
 ├── Makefile               # build / deploy / test-live convenience targets
-├── requirements.txt       # lmdb, pysodium, hio, falcon, boto3, etc.
-├── bootstrap.py           # Lambda runtime entry; imports mailbox_handler
-├── mailbox_handler.py     # init(), handler(event, context), route dispatch
+├── requirements.txt       # lmdb, pysodium, hio, falcon, uvicorn, boto3, etc.
+├── bootstrap.py           # uvicorn entrypoint; imports mailbox_handler.build_app
+├── mailbox_handler.py     # build_app() Falcon ASGI app; resource classes per route
 ├── env.json               # local SAM CLI envs for `sam local invoke`
 ├── events/
 │   ├── fwd-post.json
@@ -511,15 +511,15 @@ There is **no `def handler(event, context)`** for the streaming path.
 Instead:
 
 ```python
-# bootstrap.py (entrypoint, run by Docker CMD)
-import falcon
+# bootstrap.py (entrypoint, run by Docker CMD ["python", "bootstrap.py"])
 import uvicorn
 from mailbox_handler import build_app
 
 app = build_app()  # returns a falcon.asgi.App with all routes mounted
 
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8080, log_level="info")
+# Invoked as __main__ by the Docker CMD; no guard needed. uvicorn binds
+# to AWS_LWA_PORT (default 8080) — the port LWA forwards Lambda invokes to.
+uvicorn.run(app, host="0.0.0.0", port=8080, log_level="info")
 ```
 
 ```python
@@ -701,7 +701,10 @@ Companion `Dockerfile` excerpt (the one new line vs the witness image):
 
 ```dockerfile
 FROM python:3.14-slim
-# Lambda Web Adapter as a Lambda Extension
+# Lambda Web Adapter as a Lambda Extension.
+# Tag 1.0.0 is the GA release per
+# https://github.com/awslabs/aws-lambda-web-adapter/releases (Mar 2024).
+# Verify the current latest tag before Task 1.4 and re-pin if newer.
 COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:1.0.0 \
      /lambda-adapter /opt/extensions/lambda-adapter
 # ... rest of the build (libsodium, pip install, COPY src, etc.) ...
