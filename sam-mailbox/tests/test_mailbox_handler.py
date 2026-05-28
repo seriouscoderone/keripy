@@ -165,3 +165,58 @@ def test_format_sse_events_topic_key_construction():
     _format_sse_events(hby, "BAlice", {"credential": 5})
     assert captured["topic"] == b"BAlice/credential"
     assert captured["fn"] == 6  # last_on + 1
+
+
+# ---------------------------------------------------------------------------
+# Task 2.5: OOBIResource
+# ---------------------------------------------------------------------------
+
+def test_oobi_returns_404_for_non_mailbox_aid():
+    from mailbox_handler import build_app
+    with patch("mailbox_handler._hab") as mock_hab, \
+         patch("mailbox_handler._hby") as mock_hby:
+        mock_hab.pre = "BMailbox_AID"
+        mock_hby.kevers = {"BMailbox_AID": MagicMock()}
+        client = testing.TestClient(build_app())
+        result = client.simulate_get("/oobi/BSome_other_AID/mailbox")
+    assert result.status_code == 404
+
+
+def test_oobi_returns_cesr_for_mailbox_self():
+    """OOBI for the mailbox's own AID returns CESR with KERI-AID header."""
+    from mailbox_handler import build_app
+    fake_msgs = b'{"v":"KERI10JSON","t":"icp"}-AAB-DUMMY-CESR-BYTES'
+    with patch("mailbox_handler._hab") as mock_hab, \
+         patch("mailbox_handler._hby") as mock_hby:
+        mock_hab.pre = "BMailbox_AID"
+        mock_hab.replyToOobi = MagicMock(return_value=bytearray(fake_msgs))
+        mock_hab.replay = MagicMock(return_value=bytearray())
+        mock_hby.prefixes = {"BMailbox_AID"}
+        kever = MagicMock()
+        kever.wits = []
+        mock_hby.kevers = {"BMailbox_AID": kever}
+        mock_hby.db.fullyWitnessed = MagicMock(return_value=True)
+        client = testing.TestClient(build_app())
+        result = client.simulate_get("/oobi/BMailbox_AID/mailbox")
+    assert result.status_code == 200
+    assert result.headers.get("Content-Type") == "application/cesr"
+    assert result.headers.get("KERI-AID") == "BMailbox_AID"
+
+
+def test_oobi_bare_path_defaults_to_self():
+    """GET /oobi (no aid in path) returns the mailbox's own OOBI."""
+    from mailbox_handler import build_app
+    fake_msgs = b'OOBI-CESR-BYTES'
+    with patch("mailbox_handler._hab") as mock_hab, \
+         patch("mailbox_handler._hby") as mock_hby:
+        mock_hab.pre = "BMailbox_AID"
+        mock_hab.replyToOobi = MagicMock(return_value=bytearray(fake_msgs))
+        mock_hab.replay = MagicMock(return_value=bytearray())
+        mock_hby.prefixes = {"BMailbox_AID"}
+        kever = MagicMock()
+        kever.wits = []
+        mock_hby.kevers = {"BMailbox_AID": kever}
+        mock_hby.db.fullyWitnessed = MagicMock(return_value=True)
+        client = testing.TestClient(build_app())
+        result = client.simulate_get("/oobi")
+    assert result.status_code == 200

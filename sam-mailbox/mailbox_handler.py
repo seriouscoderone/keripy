@@ -132,6 +132,56 @@ def _detect_mbx_query(ims):
     return None
 
 
+class OOBIResource:
+    """GET /oobi[/{aid}[/{role}[/{eid}]]] — serves OOBI rpy stream for the
+    mailbox's own AID. Returns 404 for any other AID since the mailbox is
+    authoritative only for itself.
+
+    Body is plain ASCII CESR (qb64 is ASCII-safe), so Accept: */* clients
+    receive raw bytes rather than base64.
+    """
+
+    async def on_get(self, req, resp, aid=None, role=None, eid=None):
+        from keri.kering import Roles
+
+        # Bare /oobi defaults to self-OOBI
+        if aid is None:
+            aid = _hab.pre
+
+        # Mailbox is authoritative only for its own AID
+        if aid != _hab.pre:
+            resp.media = {"error": f"unknown aid: {aid}"}
+            resp.status = falcon.HTTP_404
+            return
+
+        if aid not in _hby.kevers:
+            resp.media = {"error": f"unknown aid: {aid}"}
+            resp.status = falcon.HTTP_404
+            return
+
+        kever = _hby.kevers[aid]
+        if not _hby.db.fullyWitnessed(kever.serder):
+            resp.media = {"error": "not fully witnessed"}
+            resp.status = falcon.HTTP_404
+            return
+
+        eids = [eid] if eid else []
+        msgs = _hab.replyToOobi(aid=aid, role=role, eids=eids)
+        if not msgs and role is None:
+            msgs = _hab.replyToOobi(aid=aid, role=Roles.mailbox, eids=eids)
+            msgs.extend(_hab.replay(aid))
+
+        if not msgs:
+            resp.media = {"error": "no oobi content available"}
+            resp.status = falcon.HTTP_404
+            return
+
+        resp.content_type = "application/cesr"
+        resp.set_header("KERI-AID", aid)
+        resp.data = bytes(msgs)
+        resp.status = falcon.HTTP_200
+
+
 class StatusResource:
     """GET / — return mailbox status and identifier."""
 
@@ -156,4 +206,11 @@ def build_app():
     """
     app = falcon.asgi.App()
     app.add_route("/", StatusResource())
+
+    oobi = OOBIResource()
+    app.add_route("/oobi", oobi)
+    app.add_route("/oobi/{aid}", oobi)
+    app.add_route("/oobi/{aid}/{role}", oobi)
+    app.add_route("/oobi/{aid}/{role}/{eid}", oobi)
+
     return app
