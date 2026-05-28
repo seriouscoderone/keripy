@@ -140,16 +140,18 @@ def init():
     endpoint_url = os.environ.get("MAILBOX_ENDPOINT_URL")
     baser_table = os.environ.get("MAILBOX_BASER_TABLE") or f"{name}-db"
     keeper_table = os.environ.get("MAILBOX_KEEPER_TABLE") or f"{name}-ks"
-    witness_aid = os.environ.get("WITNESS_AID")
-    witness_url = (os.environ.get("WITNESS_URL", "") or "").rstrip("/")
+    # WITNESS_AID / WITNESS_URL are kept as env vars for forward compatibility
+    # but are no longer used at init() time. keripy v2 forbids non-transferable
+    # AIDs from declaring witnesses (eventing.py:2230); the mailbox AID is
+    # self-anchored (trust via DNS, same model as the witness service).
+    # Re-enabling witnessing requires switching the mailbox to a transferable
+    # AID with next-key management.
 
     if not salt:
         raise RuntimeError(
             "MAILBOX_SALT env var is required — refusing to mint a "
             "non-recoverable AID with a fresh salt"
         )
-    if not witness_aid or not witness_url:
-        raise RuntimeError("WITNESS_AID and WITNESS_URL env vars are required")
 
     kwa = dict(region=region)
     if endpoint_url:
@@ -195,30 +197,14 @@ def init():
         else:
             raise
 
-    # Load witness KEL into _hby.kevers BEFORE makeHab so the witness AID
-    # we declare in b:[witness_aid] is recognized as a known kever. Skip
-    # if already loaded (warm cold-start replay).
-    if witness_aid not in _hby.kevers:
-        import urllib.request
-        oobi_url = f"{witness_url}/oobi/{witness_aid}/controller"
-        logger.info("fetching witness OOBI %s", oobi_url)
-        try:
-            with urllib.request.urlopen(oobi_url, timeout=10) as r:
-                kel_bytes = r.read()
-            _hby.psr.parse(ims=bytearray(kel_bytes))
-        except Exception as exc:
-            logger.warning("witness OOBI fetch failed: %s — continuing; "
-                           "makeHab will declare wits=[%s] regardless",
-                           exc, witness_aid)
-
-    # Get or create mailbox Hab — witnessed by witness.keri.host
+    # Get or create mailbox Hab — non-transferable, no witnesses (see note
+    # above; keripy v2 forbids the non-trans + wits combination).
     _hab = _hby.habByName(alias)
     if _hab is None:
         def _make_mailbox_hab():
             return _hby.makeHab(
                 name=alias, transferable=False,
                 isith='1', icount=1, ncount=0, nsith='0',
-                wits=[witness_aid], toad=1,
             )
         try:
             _hab = _make_mailbox_hab()
@@ -233,24 +219,13 @@ def init():
                 setup_keeper(ks)
                 _hby = Habery(name=name, temp=False, free=True,
                               db=db, ks=ks, cf=cf, salt=salt)
-                # Re-load witness KEL into the fresh Habery's kevers
-                if witness_aid not in _hby.kevers:
-                    try:
-                        with urllib.request.urlopen(
-                                f"{witness_url}/oobi/{witness_aid}/controller",
-                                timeout=10) as r:
-                            _hby.psr.parse(ims=bytearray(r.read()))
-                    except Exception:
-                        pass
                 _hab = _make_mailbox_hab()
             else:
                 raise
 
     _hby.prefixes.add(_hab.pre)
 
-    # One-time witness round-trip on fresh inception (for the receipt itself —
-    # the witness KEL was already loaded above).
-    _ensure_witness_receipt(witness_aid=witness_aid, witness_url=witness_url)
+    # No witness round-trip — see note about non-trans + wits at top of init().
 
     # Publish self-rpy (controller + mailbox roles)
     _publish_self_endpoints()
