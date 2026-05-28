@@ -6,6 +6,10 @@ from unittest.mock import patch, MagicMock
 import falcon
 from falcon import testing
 
+from keri.app.habbing import Habery
+from keri.core.signing import Salter
+from keri.core import eventing
+
 
 def test_build_app_returns_falcon_asgi_app():
     """build_app() returns a Falcon ASGI App instance."""
@@ -38,3 +42,45 @@ def test_get_unknown_route_returns_404():
     client = testing.TestClient(build_app())
     result = client.simulate_get("/does-not-exist")
     assert result.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Task 2.2: get_body_bytes and _extract_cesr_stream helpers
+# ---------------------------------------------------------------------------
+
+def test_get_body_bytes_plain_string():
+    from mailbox_handler import get_body_bytes
+    event = {"body": "hello"}
+    assert get_body_bytes(event) == b"hello"
+
+
+def test_get_body_bytes_base64_encoded():
+    from mailbox_handler import get_body_bytes
+    import base64
+    event = {"body": base64.b64encode(b"hello").decode(), "isBase64Encoded": True}
+    assert get_body_bytes(event) == b"hello"
+
+
+def test_get_body_bytes_empty():
+    from mailbox_handler import get_body_bytes
+    assert get_body_bytes({"body": ""}) == b""
+    assert get_body_bytes({}) == b""
+
+
+def test_extract_cesr_stream_body_only():
+    from mailbox_handler import _extract_cesr_stream
+    event = {"body": "EVENT_CESR", "headers": {}}
+    assert bytes(_extract_cesr_stream(event)) == b"EVENT_CESR"
+
+
+def test_extract_cesr_stream_with_attachment_header():
+    from mailbox_handler import _extract_cesr_stream
+    event = {"body": "EVENT", "headers": {"CESR-ATTACHMENT": "-AABATTACH"}}
+    # No -V/-C wrapper, attachment passes through unchanged
+    assert bytes(_extract_cesr_stream(event)) == b"EVENT-AABATTACH"
+
+
+def test_extract_cesr_stream_case_insensitive_header():
+    from mailbox_handler import _extract_cesr_stream
+    event = {"body": "EVENT", "headers": {"cesr-attachment": "-AABSIG"}}
+    assert bytes(_extract_cesr_stream(event)) == b"EVENT-AABSIG"
