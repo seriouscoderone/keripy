@@ -1,0 +1,8 @@
+{
+  "httpMethod": "POST",
+  "path": "/",
+  "headers": {"Content-Type": "application/cesr"},
+  "queryStringParameters": null,
+  "body": "REPLACE_WITH_REAL_MBX_QRY_CESR",
+  "isBase64Encoded": false
+}
