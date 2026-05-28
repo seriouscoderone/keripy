@@ -475,8 +475,11 @@ streaming `/response` endpoint.
 - **LWA is officially the supported path** for Python streaming and ships a
   working FastAPI streaming example (`fastapi-response-streaming`). It is a
   Lambda Extension (sidecar), not a runtime replacement — it composes with
-  `awslambdaric` cleanly and supports non-AWS base images including
-  `python:3.x-slim`.
+  `awslambdaric` cleanly. LWA documentation lists
+  `python:3.12.0-slim-bullseye` in its FastAPI streaming example;
+  `python:3.14-slim` is assumed compatible because LWA is a binary
+  extension that does not link against Python, but this should be verified
+  by a local cold-start test before relying on it in production.
 - LWA handles the API GW response-streaming wire format (metadata JSON
   prelude + `\x00 * 8` delimiter + chunked body) **transparently**: the
   Python app just writes a normal streaming HTTP response and LWA does the
@@ -546,48 +549,153 @@ function-level configuration.
 
 ### Exact SAM template snippet
 
+> **Note on `InvokeMode: RESPONSE_STREAM`:** the original Open Question 1
+> mentioned this property "on `AWS::Serverless::Function` (or CFN
+> equivalent)". That property name belongs to
+> `AWS::Lambda::FunctionUrlConfig` (and the SAM `FunctionUrlConfig:
+> InvokeMode: RESPONSE_STREAM` sugar for it) and is **not applicable here** —
+> we use API GW proxy integration, not a Function URL. For the API GW path,
+> streaming is configured via the integration URI suffix
+> (`/response-streaming-invocations` at API version `2021-11-15`), and the
+> Python app's streaming behavior is controlled by the LWA env var
+> `AWS_LWA_INVOKE_MODE: response_stream` on the Function.
+
+**Approach A (preferred for Task 1.7) — implicit API GW via SAM `Events:`
+block, matching `sam-witness/template.yaml`.** The SAM transform
+auto-generates the `AWS::ApiGateway::RestApi`, `Deployment`, `Stage`, and
+the `AWS::Lambda::Permission` for `apigateway.amazonaws.com` from the
+`Events:` block. The catch is that SAM-generated methods use the
+**buffered** `/invocations` URI by default; to force streaming we override
+the integration URI on the generated method via OpenAPI `DefinitionBody`
+(or `DefinitionUri`) on a sibling `AWS::Serverless::Api`. Concretely:
+
 ```yaml
+Globals:
+  Function:
+    Architectures: [arm64]
+    Timeout: 870        # < 15-min Lambda streaming cap (900s)
+    MemorySize: 1024
+  Api:
+    OpenApiVersion: 3.0.1   # avoids the SAM "Stage" extra-stage bug
+    EndpointConfiguration:
+      Type: REGIONAL        # REQUIRED — Edge-optimized caps idle at 30s
+    BinaryMediaTypes:
+      - application/cesr
+      - "*/*"
+
 Resources:
+  MailboxApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: Prod
+      EndpointConfiguration:
+        Type: REGIONAL
+      DefinitionBody:
+        openapi: 3.0.1
+        info: {title: mailbox-api, version: "1.0"}
+        paths:
+          /:
+            x-amazon-apigateway-any-method:
+              x-amazon-apigateway-integration:
+                type: aws_proxy
+                httpMethod: POST
+                # Streaming-specific URI: /response-streaming-invocations
+                # (NOT /invocations) and date 2021-11-15 (NOT 2015-03-31).
+                uri:
+                  Fn::Sub: >-
+                    arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2021-11-15/functions/${MailboxFunction.Arn}/response-streaming-invocations
+                passthroughBehavior: when_no_match
+          /{proxy+}:
+            x-amazon-apigateway-any-method:
+              parameters:
+                - name: proxy
+                  in: path
+                  required: true
+                  schema: {type: string}
+              x-amazon-apigateway-integration:
+                type: aws_proxy
+                httpMethod: POST
+                uri:
+                  Fn::Sub: >-
+                    arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2021-11-15/functions/${MailboxFunction.Arn}/response-streaming-invocations
+                passthroughBehavior: when_no_match
+
   MailboxFunction:
     Type: AWS::Serverless::Function
     Properties:
+      FunctionName: !Sub "${MailboxName}-handler"
       PackageType: Image
-      Architectures: [arm64]
-      Timeout: 870        # < 15-min streaming cap
-      MemorySize: 1024
+      Description: KERI Mailbox Lambda (Python 3.14 + LWA streaming)
       Environment:
         Variables:
+          # LWA streaming switch — this is the Python-side streaming knob,
+          # NOT the FunctionUrlConfig.InvokeMode property.
           AWS_LWA_INVOKE_MODE: response_stream
           AWS_LWA_PORT: "8080"
           AWS_LWA_READINESS_CHECK_PATH: /status
-          # ... mailbox-specific env (table names, witness AID, etc.)
+          # ... mailbox-specific env (table names, witness AID, salt, etc.)
+          LD_LIBRARY_PATH: /var/task/lib
+      Policies:
+        - DynamoDBCrudPolicy: {TableName: !Ref MailboxBaserTable}
+        - DynamoDBCrudPolicy: {TableName: !Ref MailboxKeeperTable}
+      # Events: block makes SAM generate Deployment + Stage + Permission
+      # automatically against MailboxApi. We list every path/method the
+      # Falcon app serves; SAM wires invoke permission for each.
+      Events:
+        AnyRoot:
+          Type: Api
+          Properties: {RestApiId: !Ref MailboxApi, Path: /,           Method: any}
+        AnyProxy:
+          Type: Api
+          Properties: {RestApiId: !Ref MailboxApi, Path: /{proxy+},  Method: any}
     Metadata:
-      DockerContext: .
-      Dockerfile: Dockerfile
+      Dockerfile: sam-mailbox/Dockerfile
+      DockerContext: ../
+      DockerTag: latest
+```
 
-  MailboxApi:
-    Type: AWS::ApiGateway::RestApi
-    Properties:
-      Name: mailbox-api
-      EndpointConfiguration:
-        Types: [REGIONAL]    # REQUIRED — Edge-optimized caps idle at 30s
+With Approach A, the SAM transform emits these implicit resources for you
+(no explicit definitions needed): `AWS::ApiGateway::Deployment`,
+`AWS::ApiGateway::Stage` (named `Prod`), and one
+`AWS::Lambda::Permission` per `Events:` entry granting
+`apigateway.amazonaws.com` `lambda:InvokeFunction` on `MailboxFunction`
+with `SourceArn` scoped to the API stage. The `OpenApiVersion: 3.0.1`
+under `Globals.Api` suppresses the SAM-default extra `Stage` resource.
 
-  MailboxAnyMethod:
-    Type: AWS::ApiGateway::Method
+**Approach B (escape hatch) — fully explicit API GW resources.** Use this
+only if SAM's OpenAPI override path doesn't work for some reason
+(e.g. `sam local` quirks). Three additional resources must be authored by
+hand on top of `AWS::ApiGateway::RestApi` + `AWS::ApiGateway::Method`:
+
+```yaml
+  MailboxApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: [MailboxAnyMethod, MailboxProxyMethod]
     Properties:
       RestApiId: !Ref MailboxApi
-      ResourceId: !GetAtt MailboxApi.RootResourceId
-      HttpMethod: ANY
-      AuthorizationType: NONE
-      Integration:
-        Type: AWS_PROXY
-        IntegrationHttpMethod: POST
-        # NB: /response-streaming-invocations (NOT /invocations).
-        # API version date is 2021-11-15 (the streaming-specific date,
-        # NOT 2015-03-31 from the buffered proxy integration).
-        Uri: !Sub >-
-          arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2021-11-15/functions/${MailboxFunction.Arn}/response-streaming-invocations
+
+  MailboxApiStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      StageName: Prod
+      RestApiId: !Ref MailboxApi
+      DeploymentId: !Ref MailboxApiDeployment
+
+  MailboxFunctionApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref MailboxFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub >-
+        arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${MailboxApi}/*/*/*
 ```
+
+**Recommendation for Task 1.7:** start with Approach A. The
+`sam-witness/template.yaml` already uses the `Events:` block pattern, so
+the mailbox template stays structurally consistent. The only delta from
+witness is the `DefinitionBody` OpenAPI override that swaps the
+integration URI suffix to `/response-streaming-invocations`.
 
 Companion `Dockerfile` excerpt (the one new line vs the witness image):
 
@@ -624,9 +732,15 @@ CMD ["python", "bootstrap.py"]
 - **Task 1.3 (`bootstrap.py`):** boot uvicorn on port 8080 with the
   Falcon app, **not** the `awslambdaric` handler-loop bootstrap used by
   `sam-witness/`.
-- **Task 1.7 (`template.yaml`):** use the snippet above — env vars on the
-  Function, `RestApi` with `REGIONAL`, integration URI suffix
+- **Task 1.7 (`template.yaml`):** use Approach A above — keep the SAM
+  `Events:` block pattern from `sam-witness/template.yaml` (so SAM
+  auto-generates `Deployment`, `Stage`, and `AWS::Lambda::Permission`),
+  but add an `AWS::Serverless::Api` with `DefinitionBody` OpenAPI override
+  whose `x-amazon-apigateway-integration.uri` ends in
   `/response-streaming-invocations` at API version `2021-11-15`.
+  `EndpointConfiguration: REGIONAL` is mandatory.
+  `AWS_LWA_INVOKE_MODE: response_stream` env var on the Function. Do
+  **not** add a `FunctionUrlConfig` — we use API GW, not Function URLs.
 - **Task 2.7 (SSE streaming handler):** implement as a Falcon async
   resource with `resp.stream = async_generator(...)`; no manual API GW
   metadata prelude or null-byte delimiter — LWA handles framing.
