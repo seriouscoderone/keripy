@@ -1,0 +1,14 @@
+{
+  "body": null,
+  "resource": "/oobi",
+  "path": "/oobi",
+  "httpMethod": "GET",
+  "headers": {
+    "Host": "localhost:3000"
+  },
+  "queryStringParameters": null,
+  "requestContext": {
+    "resourcePath": "/oobi",
+    "httpMethod": "GET"
+  }
+}

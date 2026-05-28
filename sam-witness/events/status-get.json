@@ -1,0 +1,14 @@
+{
+  "body": null,
+  "resource": "/",
+  "path": "/",
+  "httpMethod": "GET",
+  "headers": {
+    "Host": "localhost:3000"
+  },
+  "queryStringParameters": null,
+  "requestContext": {
+    "resourcePath": "/",
+    "httpMethod": "GET"
+  }
+}

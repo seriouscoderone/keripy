@@ -1,0 +1,236 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  KERI Witness Service - Serverless witness running on AWS Lambda + DynamoDB.
+  Receives key events, validates via Kevery, produces receipts, stores KEL,
+  and serves OOBI endpoints. Uses a container image (Python 3.14+).
+
+Globals:
+  Function:
+    Timeout: 120
+    MemorySize: 1024
+    Architectures:
+      - arm64
+  Api:
+    BinaryMediaTypes:
+      - application/cesr
+      - "*/*"
+
+Parameters:
+  WitnessName:
+    Type: String
+    Default: witness
+    Description: Base name for witness databases and resources
+  WitnessSalt:
+    Type: String
+    Default: ""
+    Description: qb64-encoded salt for key derivation (leave empty for auto-generated)
+  WitnessAlias:
+    Type: String
+    Default: witness
+    Description: Alias for the witness Hab
+  DomainName:
+    Type: String
+    Default: witness.keri.host
+    Description: Custom domain name for the witness API
+  HostedZoneId:
+    Type: String
+    Default: Z0070723WLKQKTOACN5H
+    Description: Route53 hosted zone ID for DNS validation
+
+Resources:
+  # DynamoDB table for Baser (KEL events, escrows, state, reger, mailboxer)
+  WitnessBaserTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${WitnessName}-db"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: gsi_pk
+          AttributeType: S
+        - AttributeName: gsi_sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: subdb-index
+          KeySchema:
+            - AttributeName: gsi_pk
+              KeyType: HASH
+            - AttributeName: gsi_sk
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  # DynamoDB table for Keeper (private keys, key parameters)
+  WitnessKeeperTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${WitnessName}-ks"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: gsi_pk
+          AttributeType: S
+        - AttributeName: gsi_sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: subdb-index
+          KeySchema:
+            - AttributeName: gsi_pk
+              KeyType: HASH
+            - AttributeName: gsi_sk
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  # Lambda function (container image with Python 3.14)
+  WitnessFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${WitnessName}-handler"
+      PackageType: Image
+      ImageUri: !Sub "${WitnessName}-handler:latest"
+      Description: KERI Witness Lambda handler (Python 3.14 container)
+      Environment:
+        Variables:
+          WITNESS_NAME: !Ref WitnessName
+          WITNESS_ALIAS: !Ref WitnessAlias
+          WITNESS_BASER_TABLE: !Ref WitnessBaserTable
+          WITNESS_KEEPER_TABLE: !Ref WitnessKeeperTable
+          WITNESS_SALT: !Ref WitnessSalt
+          WITNESS_REGION: !Ref AWS::Region
+          WITNESS_ENDPOINT_URL: ""
+          WITNESS_URL: !Sub "https://${DomainName}"
+          LD_LIBRARY_PATH: /var/task/lib
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref WitnessBaserTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref WitnessKeeperTable
+      Events:
+        PostRoot:
+          Type: Api
+          Properties:
+            Path: /
+            Method: post
+        PutRoot:
+          Type: Api
+          Properties:
+            Path: /
+            Method: put
+        GetRoot:
+          Type: Api
+          Properties:
+            Path: /
+            Method: get
+        PostReceipts:
+          Type: Api
+          Properties:
+            Path: /receipts
+            Method: post
+        GetReceipts:
+          Type: Api
+          Properties:
+            Path: /receipts
+            Method: get
+        GetQuery:
+          Type: Api
+          Properties:
+            Path: /query
+            Method: get
+        GetOobi:
+          Type: Api
+          Properties:
+            Path: /oobi
+            Method: get
+        GetOobiAid:
+          Type: Api
+          Properties:
+            Path: /oobi/{aid}
+            Method: get
+        GetOobiRole:
+          Type: Api
+          Properties:
+            Path: /oobi/{aid}/{role}
+            Method: get
+        GetOobiEid:
+          Type: Api
+          Properties:
+            Path: /oobi/{aid}/{role}/{eid}
+            Method: get
+    Metadata:
+      Dockerfile: sam-witness/Dockerfile
+      DockerContext: ../
+      DockerTag: latest
+
+  # ACM certificate for custom domain
+  WitnessCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref DomainName
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Ref DomainName
+          HostedZoneId: !Ref HostedZoneId
+
+  # API Gateway custom domain
+  WitnessApiDomainName:
+    Type: AWS::ApiGateway::DomainName
+    Properties:
+      DomainName: !Ref DomainName
+      RegionalCertificateArn: !Ref WitnessCertificate
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  # Base path mapping
+  WitnessBasePathMapping:
+    Type: AWS::ApiGateway::BasePathMapping
+    Properties:
+      DomainName: !Ref WitnessApiDomainName
+      RestApiId: !Ref ServerlessRestApi
+      Stage: Prod
+
+  # Route53 DNS record
+  WitnessDnsRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref DomainName
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt WitnessApiDomainName.RegionalDomainName
+        HostedZoneId: !GetAtt WitnessApiDomainName.RegionalHostedZoneId
+
+Outputs:
+  WitnessUrl:
+    Description: Custom domain URL for the witness
+    Value: !Sub "https://${DomainName}"
+  WitnessApiGw:
+    Description: API Gateway endpoint URL
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/"
+  WitnessPre:
+    Description: Witness prefix (AID) - GET / after deploy to retrieve
+    Value: "Deploy, then GET / to retrieve the witness AID"
+  WitnessBaserTableName:
+    Description: DynamoDB Baser table name
+    Value: !Ref WitnessBaserTable
+  WitnessKeeperTableName:
+    Description: DynamoDB Keeper table name
+    Value: !Ref WitnessKeeperTable

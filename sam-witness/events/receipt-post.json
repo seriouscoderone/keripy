@@ -1,0 +1,14 @@
+{
+  "body": "",
+  "resource": "/receipts",
+  "path": "/receipts",
+  "httpMethod": "POST",
+  "headers": {
+    "Content-Type": "application/cesr"
+  },
+  "queryStringParameters": null,
+  "requestContext": {
+    "resourcePath": "/receipts",
+    "httpMethod": "POST"
+  }
+}
