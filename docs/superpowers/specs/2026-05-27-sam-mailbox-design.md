@@ -440,3 +440,193 @@ down before implementation begins:
   remove mailbox surface.
 - Modified: `sam-witness/test_live.py` for regression coverage of the strip.
 - No changes to `src/keri/app/lambding.py` — already has what we need.
+
+## Streaming runtime resolution
+
+Resolves **Open Question 1** (Python Lambda response-streaming runtime,
+direct `awslambdaric` vs AWS Lambda Web Adapter). Findings as of 2026-05-27
+from AWS docs and the awslambdaric / aws-lambda-web-adapter repos.
+
+### Decision: AWS Lambda Web Adapter (LWA) in `RESPONSE_STREAM` mode
+
+We use **AWS Lambda Web Adapter** sidecar in front of a Falcon/uvicorn-style
+HTTP app inside the `python:3.14-slim` container. The Python app exposes a
+plain HTTP/1.1 server on `localhost:8080` and emits a normal streaming HTTP
+response (`Transfer-Encoding: chunked`); LWA reformats it into the API
+Gateway response-streaming wire format (metadata JSON + 8 null-byte
+delimiter + chunked payload) and posts it to the Lambda Runtime API's
+streaming `/response` endpoint.
+
+### Rationale (why not direct `awslambdaric`)
+
+- **AWS docs are explicit:** "Lambda supports response streaming on Node.js
+  managed runtimes. For other languages, including Python, you can use a
+  custom runtime with a custom Runtime API integration to stream responses
+  or use the Lambda Web Adapter."
+  ([configuration-response-streaming.html](https://docs.aws.amazon.com/lambda/latest/dg/configuration-response-streaming.html))
+- `awslambdaric` (latest 4.0.0, 3.1.1 stable May 2025) **has no
+  `streamifyResponse`-equivalent decorator and no public generator-based
+  streaming API.** There is no Python equivalent of
+  `awslambda.streamifyResponse(...)`. Hand-rolling a custom Runtime API
+  client that speaks `Lambda-Runtime-Function-Response-Mode: streaming`
+  with chunked transfer encoding to `/runtime/invocation/AwsRequestId/response`
+  is technically possible but is exactly the "custom Runtime API
+  integration" the AWS docs point at — significant scope for v1.
+- **LWA is officially the supported path** for Python streaming and ships a
+  working FastAPI streaming example (`fastapi-response-streaming`). It is a
+  Lambda Extension (sidecar), not a runtime replacement — it composes with
+  `awslambdaric` cleanly and supports non-AWS base images including
+  `python:3.x-slim`.
+- LWA handles the API GW response-streaming wire format (metadata JSON
+  prelude + `\x00 * 8` delimiter + chunked body) **transparently**: the
+  Python app just writes a normal streaming HTTP response and LWA does the
+  framing. This is critical for our SSE use case — we can yield
+  `data: <cesr>\n\n` and `:keepalive\n\n` frames as ordinary HTTP chunks
+  without manually constructing the API GW prelude.
+- Cold-start cost of the LWA extension is small (single Rust binary
+  ~10 MB, multi-arch). Acceptable for a long-poll workload where cold
+  starts are amortized over multi-minute connections.
+
+### Approach: Falcon ASGI/WSGI app behind LWA
+
+The handler is an HTTP server, not a Lambda `(event, context)` callable.
+`bootstrap.py` starts a uvicorn (or `falcon`-native gunicorn) server on
+`AWS_LWA_PORT=8080` and registers Falcon resources for `/`, `/oobi/...`,
+`/`, `POST /` (CESR ingest), and `POST /` query path that maps to
+`qry r=/mbx`. The SSE long-poll endpoint is a Falcon resource whose
+`on_post` method returns a streaming response (e.g. via Falcon's
+`resp.stream = generator(...)`) emitting `data:`/`:keepalive` frames.
+
+This conveniently matches keripy's existing `indirecting.HttpEnd` Falcon
+route shape — we are not inventing new handler conventions, we are reusing
+the same Falcon plumbing the reference implementation already uses for
+witness/mailbox endpoints.
+
+### Exact handler signature
+
+There is **no `def handler(event, context)`** for the streaming path.
+Instead:
+
+```python
+# bootstrap.py (entrypoint, run by Docker CMD)
+import falcon
+import uvicorn
+from mailbox_handler import build_app
+
+app = build_app()  # returns a falcon.asgi.App with all routes mounted
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8080, log_level="info")
+```
+
+```python
+# mailbox_handler.py — SSE poll resource
+class MbxPollResource:
+    async def on_post(self, req, resp):
+        body = await req.bounded_stream.read()
+        # ... parse CESR qry r=/mbx, look up cursor, etc. ...
+        resp.content_type = "text/event-stream"
+        resp.set_header("Cache-Control", "no-cache")
+        resp.set_header("X-Accel-Buffering", "no")
+        resp.stream = self._sse_generator(pre, topic, cursor, deadline)
+
+    async def _sse_generator(self, pre, topic, cursor, deadline):
+        while time.time() < deadline:
+            for evt in mailboxer.cloneIter(pre=pre, topic=topic, fn=cursor):
+                yield format_sse_event(evt).encode("utf-8")
+                cursor = evt.fn + 1
+            yield b":keepalive\n\n"
+            await asyncio.sleep(KEEPALIVE_INTERVAL_S)
+```
+
+The buffered endpoints (`GET /oobi/...`, `POST /` CESR ingest,
+`GET /status`) are also Falcon resources with normal (non-streaming)
+responses; LWA handles both modes through the same `RESPONSE_STREAM`
+function-level configuration.
+
+### Exact SAM template snippet
+
+```yaml
+Resources:
+  MailboxFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      Architectures: [arm64]
+      Timeout: 870        # < 15-min streaming cap
+      MemorySize: 1024
+      Environment:
+        Variables:
+          AWS_LWA_INVOKE_MODE: response_stream
+          AWS_LWA_PORT: "8080"
+          AWS_LWA_READINESS_CHECK_PATH: /status
+          # ... mailbox-specific env (table names, witness AID, etc.)
+    Metadata:
+      DockerContext: .
+      Dockerfile: Dockerfile
+
+  MailboxApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: mailbox-api
+      EndpointConfiguration:
+        Types: [REGIONAL]    # REQUIRED — Edge-optimized caps idle at 30s
+
+  MailboxAnyMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref MailboxApi
+      ResourceId: !GetAtt MailboxApi.RootResourceId
+      HttpMethod: ANY
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        # NB: /response-streaming-invocations (NOT /invocations).
+        # API version date is 2021-11-15 (the streaming-specific date,
+        # NOT 2015-03-31 from the buffered proxy integration).
+        Uri: !Sub >-
+          arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2021-11-15/functions/${MailboxFunction.Arn}/response-streaming-invocations
+```
+
+Companion `Dockerfile` excerpt (the one new line vs the witness image):
+
+```dockerfile
+FROM python:3.14-slim
+# Lambda Web Adapter as a Lambda Extension
+COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:1.0.0 \
+     /lambda-adapter /opt/extensions/lambda-adapter
+# ... rest of the build (libsodium, pip install, COPY src, etc.) ...
+CMD ["python", "bootstrap.py"]
+```
+
+### Limits this commits us to
+
+- **REST API Gateway only.** HTTP API does not (yet) support Lambda
+  response-streaming integration. Our existing witness pattern is REST
+  API, so this is no regression.
+- **Regional endpoint required** for the 5-minute idle timeout.
+  Edge-optimized caps idle at 30s, which would kill long-poll holds.
+- **Function `Timeout` ≤ 900s** (15-min Lambda max for streaming). We pin
+  870s to leave headroom.
+- **Keepalive cadence < 5 min** to avoid API GW idle close. We will use
+  ~25s in implementation, well under the cap.
+- **`sam local invoke` cannot exercise the streaming integration** — it
+  speaks buffered request/response only. Tier-3 live tests against a
+  deployed stack are the only way to verify SSE behavior end-to-end. This
+  is already called out in the test plan section.
+- **Bandwidth cap after first 6 MB:** 2 MBps. Mailbox payloads are tiny
+  CESR frames so this is irrelevant for v1, but worth knowing.
+
+### Feeds into
+
+- **Task 1.4 (`Dockerfile`):** add the LWA `COPY --from=...` line.
+- **Task 1.3 (`bootstrap.py`):** boot uvicorn on port 8080 with the
+  Falcon app, **not** the `awslambdaric` handler-loop bootstrap used by
+  `sam-witness/`.
+- **Task 1.7 (`template.yaml`):** use the snippet above — env vars on the
+  Function, `RestApi` with `REGIONAL`, integration URI suffix
+  `/response-streaming-invocations` at API version `2021-11-15`.
+- **Task 2.7 (SSE streaming handler):** implement as a Falcon async
+  resource with `resp.stream = async_generator(...)`; no manual API GW
+  metadata prelude or null-byte delimiter — LWA handles framing.
