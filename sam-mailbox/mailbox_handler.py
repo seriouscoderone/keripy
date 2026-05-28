@@ -6,10 +6,12 @@ warm invocations reuse them. build_app() wires Falcon routes to Resource
 classes and returns the ASGI App that bootstrap.py boots with uvicorn.
 """
 
+import asyncio
 import base64
 import json
 import logging
 import os
+import time
 
 import falcon
 import falcon.asgi
@@ -132,6 +134,58 @@ def _detect_mbx_query(ims):
     return None
 
 
+async def _stream_mbx_response(pre, topics, soft_cap_s=780.0, poll_interval_s=1.0,
+                               keepalive_interval_s=240.0):
+    """Async generator yielding SSE-framed bytes for an mbx long-poll.
+
+    Yields the initial drain immediately, then polls cloneTopicIter every
+    poll_interval_s for new messages until soft_cap_s elapses. Emits a
+    `:keepalive\\n\\n` comment frame every keepalive_interval_s of silence.
+
+    Args:
+        pre (str | bytes): recipient AID
+        topics (dict): {topic_name: last_seen_ordinal}; copied internally so
+            the caller's dict is not mutated
+        soft_cap_s (float): max total streaming duration in seconds
+        poll_interval_s (float): how often to poll for new messages
+        keepalive_interval_s (float): how often to emit `:keepalive` when idle
+
+    Yields:
+        bytes: SSE-framed chunks (data frame or keepalive comment)
+    """
+    deadline = time.monotonic() + soft_cap_s
+    last_event_ts = time.monotonic()
+    pre_str = pre.decode("utf-8") if isinstance(pre, (bytes, bytearray)) else pre
+    cursors = dict(topics)
+
+    try:
+        while time.monotonic() < deadline:
+            produced = False
+            for name, last_on in list(cursors.items()):
+                topic_key = f"{pre_str}/{name}".encode("utf-8")
+                try:
+                    for on, _topic, msg in _hby.db.cloneTopicIter(topic=topic_key,
+                                                                  fn=int(last_on) + 1):
+                        msg_text = bytes(msg).decode("utf-8")
+                        yield (f"id: {on}\nevent: {name}\nretry: 1000\n"
+                               f"data: {msg_text}\n\n").encode("utf-8")
+                        cursors[name] = on
+                        produced = True
+                except Exception as exc:
+                    logger.warning("cloneTopicIter failed for pre=%s topic=%s: %s",
+                                   pre, name, exc, exc_info=True)
+            now = time.monotonic()
+            if produced:
+                last_event_ts = now
+            elif now - last_event_ts >= keepalive_interval_s:
+                yield b":keepalive\n\n"
+                last_event_ts = now
+            await asyncio.sleep(poll_interval_s)
+    except asyncio.CancelledError:
+        logger.debug("mbx stream cancelled for pre=%s (client disconnect)", pre_str)
+        raise
+
+
 class OOBIResource:
     """GET /oobi[/{aid}[/{role}[/{eid}]]] — serves OOBI rpy stream for the
     mailbox's own AID. Returns 404 for any other AID since the mailbox is
@@ -242,11 +296,10 @@ class RootResource:
                 resp.media = {"error": "qry/mbx requires q.pre (str) and q.topics (dict)"}
                 resp.status = falcon.HTTP_400
                 return
-            body_text = _format_sse_events(_hby, pre, topics)
             resp.content_type = "text/event-stream"
             resp.set_header("Cache-Control", "no-cache")
-            resp.set_header("Connection", "close")
-            resp.text = body_text
+            resp.set_header("X-Accel-Buffering", "no")
+            resp.stream = _stream_mbx_response(pre, topics)
             resp.status = falcon.HTTP_200
             return
 
