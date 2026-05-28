@@ -195,18 +195,61 @@ def init():
         else:
             raise
 
+    # Load witness KEL into _hby.kevers BEFORE makeHab so the witness AID
+    # we declare in b:[witness_aid] is recognized as a known kever. Skip
+    # if already loaded (warm cold-start replay).
+    if witness_aid not in _hby.kevers:
+        import urllib.request
+        oobi_url = f"{witness_url}/oobi/{witness_aid}/controller"
+        logger.info("fetching witness OOBI %s", oobi_url)
+        try:
+            with urllib.request.urlopen(oobi_url, timeout=10) as r:
+                kel_bytes = r.read()
+            _hby.psr.parse(ims=bytearray(kel_bytes))
+        except Exception as exc:
+            logger.warning("witness OOBI fetch failed: %s — continuing; "
+                           "makeHab will declare wits=[%s] regardless",
+                           exc, witness_aid)
+
     # Get or create mailbox Hab — witnessed by witness.keri.host
     _hab = _hby.habByName(alias)
     if _hab is None:
-        _hab = _hby.makeHab(
-            name=alias, transferable=False,
-            isith='1', icount=1, ncount=0, nsith='0',
-            wits=[witness_aid], toad=1,
-        )
+        def _make_mailbox_hab():
+            return _hby.makeHab(
+                name=alias, transferable=False,
+                isith='1', icount=1, ncount=0, nsith='0',
+                wits=[witness_aid], toad=1,
+            )
+        try:
+            _hab = _make_mailbox_hab()
+        except Exception as exc:
+            if "Already incepted" in str(exc):
+                # Stale keeper state from a prior crashed init that wrote
+                # key material but never completed the Hab record. Clear
+                # keeper and rebuild Habery + retry.
+                logger.warning("makeHab hit 'Already incepted' (%s). "
+                               "Clearing keeper and rebuilding Habery.", exc)
+                _clear_keeper(ks)
+                setup_keeper(ks)
+                _hby = Habery(name=name, temp=False, free=True,
+                              db=db, ks=ks, cf=cf, salt=salt)
+                # Re-load witness KEL into the fresh Habery's kevers
+                if witness_aid not in _hby.kevers:
+                    try:
+                        with urllib.request.urlopen(
+                                f"{witness_url}/oobi/{witness_aid}/controller",
+                                timeout=10) as r:
+                            _hby.psr.parse(ims=bytearray(r.read()))
+                    except Exception:
+                        pass
+                _hab = _make_mailbox_hab()
+            else:
+                raise
 
     _hby.prefixes.add(_hab.pre)
 
-    # One-time witness round-trip on fresh inception
+    # One-time witness round-trip on fresh inception (for the receipt itself —
+    # the witness KEL was already loaded above).
     _ensure_witness_receipt(witness_aid=witness_aid, witness_url=witness_url)
 
     # Publish self-rpy (controller + mailbox roles)
