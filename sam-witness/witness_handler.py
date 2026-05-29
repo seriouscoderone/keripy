@@ -135,6 +135,12 @@ def init():
         url_msgs.extend(_hab.makeEndRole(eid=_hab.pre, role=Roles.controller, stamp=stamp))
         url_msgs.extend(_hab.makeEndRole(eid=_hab.pre, role=Roles.witness, stamp=stamp))
         url_msgs.extend(_hab.makeLocScheme(url=witness_url, scheme=scheme, stamp=stamp))
+        # Retire the prior mailbox-role advertisement (mailbox split to
+        # sam-mailbox at mailbox.keri.host). BADA monotonicity: a newer
+        # /end/role/cut timestamp supersedes any prior /end/role/add
+        # stored from before the strip.
+        url_msgs.extend(_hab.makeEndRole(eid=_hab.pre, role=Roles.mailbox,
+                                          allow=False, stamp=stamp))
         try:
             _hby.psr.parse(ims=url_msgs)
         except Exception as exc:
