@@ -34,8 +34,8 @@ def init():
 
     from keri.db.dynamodbing import DynamoDBer
     from keri.app.lambding import (
-        BASER_STORES, KEEPER_STORES, MAILBOXER_STORES,
-        setup_baser, setup_keeper, setup_mailboxer,
+        BASER_STORES, KEEPER_STORES,
+        setup_baser, setup_keeper,
     )
     from keri.app.habbing import Habery
     from keri.app.configing import Configer
@@ -66,11 +66,12 @@ def init():
             region_name=region,
         )
 
-    # Baser and Mailboxer share a table (no overlapping subkeys)
-    baser_and_mbx_stores = list(set(BASER_STORES + MAILBOXER_STORES))
-    db = DynamoDBer.open(name=name, stores=baser_and_mbx_stores, table_name=baser_table, **kwa)
+    # Baser only — mailbox role split out to sam-mailbox at mailbox.keri.host
+    # so we no longer attach Mailboxer subdatabases here. (DynamoDB table
+    # still has any prior mbx-related keys from before the strip; harmless,
+    # they're never read by this handler now.)
+    db = DynamoDBer.open(name=name, stores=BASER_STORES, table_name=baser_table, **kwa)
     setup_baser(db)
-    setup_mailboxer(db)
 
     ks = DynamoDBer.open(name=f"{name}-ks", stores=KEEPER_STORES, table_name=keeper_table, **kwa)
     setup_keeper(ks)
@@ -133,7 +134,6 @@ def init():
         url_msgs = bytearray()
         url_msgs.extend(_hab.makeEndRole(eid=_hab.pre, role=Roles.controller, stamp=stamp))
         url_msgs.extend(_hab.makeEndRole(eid=_hab.pre, role=Roles.witness, stamp=stamp))
-        url_msgs.extend(_hab.makeEndRole(eid=_hab.pre, role=Roles.mailbox, stamp=stamp))
         url_msgs.extend(_hab.makeLocScheme(url=witness_url, scheme=scheme, stamp=stamp))
         try:
             _hby.psr.parse(ims=url_msgs)
@@ -142,12 +142,10 @@ def init():
     else:
         logger.warning("WITNESS_URL not set; OOBI responses will not include /loc/scheme")
 
-    # Register ForwardHandler so /fwd exn messages route to mbx.storeMsg.
-    # Without this, the Habery's Exchanger has empty handlers and /fwd
-    # messages dead-end at psr.parse. addHandler is at
-    # keri/peer/exchanging.py:58-63.
-    from keri.app.forwarding import ForwardHandler
-    _hby.exc.addHandler(ForwardHandler(hby=_hby, mbx=_hby.db))
+    # No ForwardHandler — /fwd exn deposits land on sam-mailbox now.
+    # Incoming /fwd exns on the witness root POST are parsed by the
+    # Exchanger which has no /fwd handler, so they no-op and the request
+    # returns 204 with no storage.
 
     # Set up parser with Kevery for processing incoming events
     _parser = _hby.psr
@@ -300,81 +298,23 @@ def _drain_receipt_cues(hby, hab):
     return receipts
 
 
-def _detect_mbx_query(ims):
-    """Inspect the first message in ims; return its serder if it's a `qry`
-    with `r='/mbx'`, else None.
-
-    Returns None on parse error so the caller falls back to the default
-    handle_cesr_ingest 204 path. Does not strip ims — only peeks; the
-    actual `_hby.psr.parse(ims)` runs after this and handles the qry
-    through Kevery normally.
-    """
-    from keri.core import serdering
-    try:
-        serder = serdering.SerderKERI(raw=bytes(ims))
-    except Exception:
-        return None
-    if serder.ked.get("t") == "qry" and serder.ked.get("r") in ("/mbx", "mbx"):
-        return serder
-    return None
-
-
-def _format_sse_events(hby, pre, topics):
-    """Walk Mailboxer for each requested topic; format as SSE events.
-
-    Args:
-        hby: Habery (uses hby.db.cloneTopicIter)
-        pre (str): recipient AID; topic keys in db.tpcs are pre+topic
-        topics (dict): {topic_name: last_seen_ordinal}
-
-    Returns:
-        str: SSE-framed body. Empty string when no new messages on any
-        topic — that's a valid empty SSE response (the client's Poller
-        treats it as "nothing new" and reconnects).
-
-    Topic key construction mirrors keri/app/forwarding.py:500 exactly:
-    f"{recipient}/{topic}".encode("utf-8"). No normalization, no
-    leading-slash trimming. Whatever the writer used, we read.
-    """
-    out = []
-    pre_str = pre.decode("utf-8") if isinstance(pre, (bytes, bytearray)) else pre
-    for name, last_on in topics.items():
-        topic_key = f"{pre_str}/{name}".encode("utf-8")
-        try:
-            for on, _topic, msg in hby.db.cloneTopicIter(topic=topic_key,
-                                                        fn=int(last_on) + 1):
-                msg_text = bytes(msg).decode("utf-8")
-                out.append(
-                    f"id: {on}\nevent: {name}\nretry: 1000\ndata: {msg_text}\n\n"
-                )
-        except Exception as exc:
-            logger.warning("cloneTopicIter failed for pre=%s topic=%s: %s",
-                           pre, name, exc, exc_info=True)
-    return "".join(out)
-
-
 def handle_cesr_ingest(event):
-    """POST / -- ingest CESR (events, /fwd exn, or qry r=/mbx).
+    """POST / -- ingest CESR (events, rpys, optionally /fwd exn no-op).
 
-    Three response paths depending on what was POSTed:
-      - Normal events / /fwd exn: 204 (events processed by Kevery,
-        forwards routed to Mailboxer.storeMsg by the registered
-        ForwardHandler in init()).
-      - qry r=/mbx: 200 + Content-Type: text/event-stream with the
-        buffered messages SSE-framed. Clients (kli MailboxDirector,
-        signify-ts Poller) reconnect after each response per their
-        existing 30s timeout loop. Matches keripy reference
-        indirecting.HttpEnd.on_post behavior.
+    Two response paths:
+      - Inbound produces witness receipts (controller's inception or
+        rotation events): 200 + Content-Type: application/cesr with the
+        signed receipts in the body, matching the synchronous receipt-back
+        flow that kli's --receipt-endpoint expects.
+      - Anything else (rpys, /fwd exns that this witness no longer
+        handles, etc.): 204 once psr.parse drains.
 
-    Use POST /receipts (handle_receipt_post) for the synchronous
-    receipt-back flow that kli's --receipt-endpoint expects.
+    Mailbox-role surface (qry r=/mbx + ForwardHandler) is no longer here —
+    it moved to sam-mailbox at mailbox.keri.host.
     """
     ims = _extract_cesr_stream(event)
     if not ims:
         return response(400, {"error": "empty body"})
-
-    # Peek for mbx query before consuming ims via psr.parse.
-    mbx_serder = _detect_mbx_query(ims)
 
     # framed=True: each HTTP POST is exactly one message + counted attachments
     # (streamCESRRequests contract). Without this, an AttachmentGroup (-V)
@@ -392,23 +332,6 @@ def handle_cesr_ingest(event):
         # No framed=True here: receipts is a concatenation of multiple
         # receipt events when multiple cues fire on one inbound request.
         _hby.psr.parse(ims=bytearray(receipts))
-
-    if mbx_serder is not None:
-        q = mbx_serder.ked.get("q") or {}
-        pre = q.get("pre")
-        topics = q.get("topics") or {}
-        if not isinstance(pre, str) or not pre or not isinstance(topics, dict):
-            return response(400, {"error": "qry/mbx requires q.pre (str) and q.topics (dict)"})
-        body = _format_sse_events(_hby, pre, topics)
-        return {
-            "statusCode": 200,
-            "headers": {
-                "Content-Type": "text/event-stream",
-                "Cache-Control": "no-cache",
-                "Connection": "close",
-            },
-            "body": body,
-        }
 
     # Synchronous receipt-back when the ingest produced witness receipts.
     # Matches keri.app.indirecting.HttpEnd.on_post reference behavior:
