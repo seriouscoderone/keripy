@@ -199,9 +199,12 @@ Resources:
         Types:
           - REGIONAL
 
-  # Base path mapping
+  # Base path mapping. DependsOn the SAM-implicit Prod stage so the
+  # mapping doesn't race the stage creation on a from-scratch deploy
+  # (without this, CFN reports "Invalid stage identifier specified").
   WitnessBasePathMapping:
     Type: AWS::ApiGateway::BasePathMapping
+    DependsOn: ServerlessRestApiProdStage
     Properties:
       DomainName: !Ref WitnessApiDomainName
       RestApiId: !Ref ServerlessRestApi
