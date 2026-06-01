@@ -3,8 +3,9 @@ Transform: AWS::Serverless-2016-10-31
 Description: >
   KERI Mailbox Service - Serverless mailbox running on AWS Lambda + DynamoDB.
   Accepts /fwd exn deposits, serves qry r=/mbx polls as SSE long-poll via
-  API Gateway response streaming. Mailbox AID is witnessed by the
-  sam-witness stack (witness.keri.host). Uses a container image (Python 3.14+).
+  API Gateway response streaming. Uses a container image (Python 3.14+).
+  All operator-specific values (DomainName, HostedZoneId, WitnessAid, etc.)
+  are deploy-time parameters with no defaults — pass via --parameter-overrides.
 
 Globals:
   Function:
@@ -32,20 +33,20 @@ Parameters:
     Description: Alias for the mailbox Hab
   DomainName:
     Type: String
-    Default: mailbox.keri.host
-    Description: Custom domain name for the mailbox API
+    Description: Custom domain name for the mailbox API (e.g. mailbox.example.com — operator-owned)
+    AllowedPattern: '^[a-zA-Z0-9.-]+$'
   HostedZoneId:
     Type: String
-    Default: Z0070723WLKQKTOACN5H
-    Description: Route53 hosted zone ID for DNS validation
+    Description: Route53 hosted zone ID for DomainName (must be created out-of-band)
+    AllowedPattern: '^Z[A-Z0-9]+$'
   WitnessAid:
     Type: String
-    Default: BNbRfMPQQge6wKO0uof9Y0e_QYOfiF08k9drc6pOgzjt
-    Description: AID of the witness that witnesses this mailbox AID
+    Description: AID of the witness for this mailbox (currently informational only — see Phase 0 spec)
+    Default: ""
   WitnessUrl:
     Type: String
-    Default: https://witness.keri.host
-    Description: Base URL of the witness service (Lambda composes /oobi/<aid>/controller and /receipts)
+    Description: Base URL of the witness service (currently informational only)
+    Default: ""
 
 Resources:
   # -----------------------------------------------------------------------

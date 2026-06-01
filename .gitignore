@@ -145,3 +145,17 @@ keripy/
 # ctags
 .tags
 scripts/demo/scripts
+
+# SAM CLI local config (operator-specific: AWS profile, stack name, salts, etc.)
+samconfig.local.toml
+samconfig.*.local.toml
+sam-witness/samconfig.local.toml
+sam-mailbox/samconfig.local.toml
+
+# SAM build artifacts
+.aws-sam/
+
+# Operator-specific deploy scripts / param files
+*.local.sh
+sam-*/deploy.local.sh
+sam-*/params.local.json

@@ -31,12 +31,12 @@ Parameters:
     Description: Alias for the witness Hab
   DomainName:
     Type: String
-    Default: witness.keri.host
-    Description: Custom domain name for the witness API
+    Description: Custom domain name for the witness API (e.g. witness.example.com — operator-owned)
+    AllowedPattern: '^[a-zA-Z0-9.-]+$'
   HostedZoneId:
     Type: String
-    Default: Z0070723WLKQKTOACN5H
-    Description: Route53 hosted zone ID for DNS validation
+    Description: Route53 hosted zone ID for DomainName (must be created out-of-band)
+    AllowedPattern: '^Z[A-Z0-9]+$'
 
 Resources:
   # DynamoDB table for Baser (KEL events, escrows, state, reger, mailboxer)
