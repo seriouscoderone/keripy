@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>keripy Bounded Context Map</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #1a1a2e;
+    color: #eee;
+    margin: 0;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  h1 { margin-bottom: 4px; }
+  .subtitle { color: #aaa; margin-bottom: 24px; font-size: 14px; }
+  .mermaid {
+    background: #fff;
+    border-radius: 12px;
+    padding: 24px;
+    width: calc(100vw - 40px);
+    min-height: calc(100vh - 200px);
+    overflow-x: auto;
+  }
+  .mermaid svg {
+    width: 100% !important;
+    height: auto !important;
+    min-height: calc(100vh - 250px);
+  }
+  .legend {
+    display: flex;
+    gap: 24px;
+    margin-top: 20px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+  }
+  .legend-swatch {
+    width: 16px;
+    height: 16px;
+    border-radius: 3px;
+  }
+</style>
+</head>
+<body>
+
+<h1>keripy Bounded Context Map</h1>
+<p class="subtitle">DDD Domain Model &mdash; 7 Bounded Contexts, 9 External Domains</p>
+
+<div class="mermaid">
+graph TB
+    subgraph SK["Shared Kernels"]
+        direction TB
+        BC3["BC-3: CESR Encoding\nMatter, Prefixer, Diger, Verfer\nSiger, Serder, Counter\ncoring.py, counting.py, serdering.py"]
+        BC4["BC-4: Persistence\nBaser, LMDBer, Suber, Komer\ndb/basing.py, dbing.py, subing.py"]
+    end
+
+    subgraph CD["Core Domain"]
+        direction TB
+        BC1["BC-1: Event Processing\nKever, Kevery, Parser, Router\nKEL invariants, key state\ncore/eventing.py, parsing.py, routing.py"]
+        BC2["BC-2: Key Management\nHab, Habery, Keeper, Manager\nKey generation, rotation, storage\napp/habbing.py, keeping.py"]
+    end
+
+    subgraph SD["Supporting Domains"]
+        direction TB
+        BC5["BC-5: Infrastructure Services\nWitnessReceiptor, WitnessPublisher\nOOBI resolver, Forwarding, Watching\napp/agenting.py, oobiing.py, watching.py"]
+        BC6["BC-6: Verifiable Credentials\nACDC issuance, revocation, verification\nRegistry, TEL, Schema validation\nvdr/, vc/, acdc/"]
+        BC7["BC-7: Peer Messaging\nEXN exchange, IPEX protocol\nChallenge-response, Multisig coord\npeer/exchanging.py, app/grouping.py"]
+    end
+
+    subgraph EX["External Domains"]
+        direction TB
+        ED1["ED-1: Crypto Signatures\nlibsodium, PyCA"]
+        ED2["ED-2: Crypto Digests\nblake3, hashlib"]
+        ED3["ED-3: LMDB Storage"]
+        ED4["ED-4: HTTP/TCP Transport\nfalcon, hio.core"]
+        ED5["ED-5: Task Orchestration\nhio"]
+        ED6["ED-6: Serialization\nJSON, CBOR, MsgPack"]
+        ED7["ED-7: Schema Validation\njsonschema"]
+    end
+
+    %% Shared kernel feeds all BCs
+    BC3 -.->|shared kernel| BC1
+    BC3 -.->|shared kernel| BC2
+    BC3 -.->|shared kernel| BC5
+    BC3 -.->|shared kernel| BC6
+    BC3 -.->|shared kernel| BC7
+    BC4 -.->|shared kernel| BC1
+    BC4 -.->|shared kernel| BC2
+    BC4 -.->|shared kernel| BC5
+    BC4 -.->|shared kernel| BC6
+
+    %% Core dependencies
+    BC2 -->|reads Kever| BC1
+    BC5 -->|uses| BC1
+    BC5 -->|uses| BC2
+    BC6 -->|verifies key state| BC1
+    BC7 -->|validates AIDs| BC1
+    BC7 -->|signs messages| BC2
+
+    %% External domain connections
+    BC3 -.- ED1
+    BC3 -.- ED2
+    BC3 -.- ED6
+    BC4 -.- ED3
+    BC5 -.- ED4
+    BC1 -.- ED5
+    BC6 -.- ED7
+
+    %% Styles
+    classDef sharedKernel fill:#4a90d9,stroke:#2c5aa0,color:#fff,stroke-width:2px
+    classDef coreDomain fill:#e8744f,stroke:#c0522a,color:#fff,stroke-width:2px
+    classDef supporting fill:#50b878,stroke:#3a8a5a,color:#fff,stroke-width:2px
+    classDef external fill:#888,stroke:#666,color:#fff,stroke-width:1px
+
+    class BC3,BC4 sharedKernel
+    class BC1,BC2 coreDomain
+    class BC5,BC6,BC7 supporting
+    class ED1,ED2,ED3,ED4,ED5,ED6,ED7 external
+
+    style SK fill:#e8f0fe,stroke:#4a90d9,stroke-width:2px,color:#333
+    style CD fill:#fde8e0,stroke:#e8744f,stroke-width:2px,color:#333
+    style SD fill:#e0f5e8,stroke:#50b878,stroke-width:2px,color:#333
+    style EX fill:#f0f0f0,stroke:#888,stroke-width:1px,color:#333
+</div>
+
+<div class="legend">
+  <div class="legend-item">
+    <div class="legend-swatch" style="background:#4a90d9"></div>
+    Shared Kernel
+  </div>
+  <div class="legend-item">
+    <div class="legend-swatch" style="background:#e8744f"></div>
+    Core Domain
+  </div>
+  <div class="legend-item">
+    <div class="legend-swatch" style="background:#50b878"></div>
+    Supporting Domain
+  </div>
+  <div class="legend-item">
+    <div class="legend-swatch" style="background:#888"></div>
+    External Domain
+  </div>
+  <div class="legend-item">
+    <span style="font-family:monospace">---></span>
+    Domain dependency
+  </div>
+  <div class="legend-item">
+    <span style="font-family:monospace">-.-></span>
+    Shared kernel usage
+  </div>
+  <div class="legend-item">
+    <span style="font-family:monospace">-.-</span>
+    External adapter
+  </div>
+</div>
+
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'default',
+    flowchart: {
+      useMaxWidth: false,
+      htmlLabels: true,
+      curve: 'basis'
+    }
+  });
+</script>
+</body>
+</html>

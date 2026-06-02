@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>keripy Bounded Context Map (DDD Spec v1)</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #1a1a2e;
+    color: #eee;
+    margin: 0;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  h1 { margin-bottom: 4px; }
+  .subtitle { color: #aaa; margin-bottom: 24px; font-size: 14px; }
+  .mermaid {
+    background: #fff;
+    border-radius: 12px;
+    padding: 24px;
+    width: calc(100vw - 40px);
+    min-height: calc(100vh - 200px);
+    overflow-x: auto;
+  }
+  .mermaid svg {
+    width: 100% !important;
+    height: auto !important;
+    min-height: calc(100vh - 250px);
+  }
+  .legend {
+    display: flex;
+    gap: 24px;
+    margin-top: 20px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+  }
+  .legend-swatch {
+    width: 16px;
+    height: 16px;
+    border-radius: 3px;
+  }
+</style>
+</head>
+<body>
+
+<h1>keripy Bounded Context Map (v1)</h1>
+<p class="subtitle">DDD Domain Model &mdash; 9 Bounded Contexts, 6 External Domains &mdash; from ddd-spec.md</p>
+
+<div class="mermaid">
+graph TB
+    subgraph SK["Shared Kernels"]
+        direction TB
+        CESR["CESR Primitives\nMatter, Verfer, Diger, Siger\nCigar, Prefixer, Tholder, Counter\ncoring.py, counting.py, indexing.py"]
+        PERSIST["Data Persistence\nBaser, LMDBer/Dber, Suber, Komer\ndb/basing.py, dbing.py, subing.py"]
+    end
+
+    subgraph CD["Core Domain"]
+        direction TB
+        KEL["KEL Processing\nKever, Kevery, Parser, Router\nKey state, pre-rotation, duplicity\neventing.py, parsing.py, routing.py"]
+        IDMGMT["Identifier Management\nHab, Habery, Keeper, Manager\nKey generation, rotation, multisig\nhabbing.py, keeping.py"]
+    end
+
+    subgraph SD["Supporting Domains"]
+        direction TB
+        WIT["Witness Infrastructure\nWitnessReceiptor, WitnessPublisher\nKAWA agreement, receipt sharing\nagenting.py, indirecting.py, watching.py"]
+        ACDC["Verifiable Credentials / ACDC\nTEL processing, Registry, Registrar\nIssuance, revocation, verification\nvdr/, vc/, acdc/"]
+        PEER["Peer Exchange Protocol\nEXN routing, IPEX negotiation\nChallenge-response, forwarding\nexchanging.py, challenging.py"]
+        OOBI["OOBI and Endpoint Discovery\nOOBI resolution, BADA policy\nEndpoint/Location records\nquerying.py, storing.py, routing.py"]
+    end
+
+    subgraph AD["Adapter Layer"]
+        direction TB
+        SVC["Service / API Layer\nFalcon REST endpoints, CLI\nHTTP transport, OpenAPI\nending.py, httping.py, cli/"]
+    end
+
+    subgraph EX["External Domains"]
+        direction TB
+        ED1["ED-1: Crypto Operations\nlibsodium, PyCA, blake3, hashlib"]
+        ED2["ED-2: LMDB Storage\nlmdb Python binding"]
+        ED3["ED-3: Task Scheduler\nhio DoDoer, Deck"]
+        ED4["ED-4: HTTP Transport\nfalcon, hio.core, http_sfv"]
+        ED5["ED-5: Wire Serialization\nJSON, CBOR, MsgPack, HJSON"]
+        ED6["ED-6: File System\nhio.base.filing, os, shutil"]
+    end
+
+    %% Shared kernel consumed by all
+    CESR -.->|shared kernel| KEL
+    CESR -.->|shared kernel| IDMGMT
+    CESR -.->|shared kernel| WIT
+    CESR -.->|shared kernel| ACDC
+    CESR -.->|shared kernel| PEER
+    CESR -.->|shared kernel| OOBI
+    PERSIST -.->|shared kernel| KEL
+    PERSIST -.->|shared kernel| IDMGMT
+    PERSIST -.->|shared kernel| ACDC
+    PERSIST -.->|shared kernel| OOBI
+
+    %% Domain dependencies
+    IDMGMT -->|reads Kever| KEL
+    WIT -->|uses| KEL
+    WIT -->|uses| IDMGMT
+    WIT -->|resolves| OOBI
+    ACDC -->|verifies key state| KEL
+    PEER -->|validates AIDs| IDMGMT
+    PEER -->|IPEX| ACDC
+    PEER -->|resolves| OOBI
+    OOBI -->|reads key state| KEL
+
+    %% Service layer depends on all
+    SVC -->|adapter| KEL
+    SVC -->|adapter| IDMGMT
+    SVC -->|adapter| WIT
+    SVC -->|adapter| ACDC
+    SVC -->|adapter| PEER
+    SVC -->|adapter| OOBI
+
+    %% External domain connections
+    CESR -.- ED1
+    CESR -.- ED5
+    PERSIST -.- ED2
+    PERSIST -.- ED6
+    KEL -.- ED3
+    SVC -.- ED4
+
+    %% Styles
+    classDef sharedKernel fill:#4a90d9,stroke:#2c5aa0,color:#fff,stroke-width:2px
+    classDef coreDomain fill:#e8744f,stroke:#c0522a,color:#fff,stroke-width:2px
+    classDef supporting fill:#50b878,stroke:#3a8a5a,color:#fff,stroke-width:2px
+    classDef adapterLayer fill:#9b59b6,stroke:#7d3c98,color:#fff,stroke-width:2px
+    classDef external fill:#888,stroke:#666,color:#fff,stroke-width:1px
+
+    class CESR,PERSIST sharedKernel
+    class KEL,IDMGMT coreDomain
+    class WIT,ACDC,PEER,OOBI supporting
+    class SVC adapterLayer
+    class ED1,ED2,ED3,ED4,ED5,ED6 external
+
+    style SK fill:#e8f0fe,stroke:#4a90d9,stroke-width:2px,color:#333
+    style CD fill:#fde8e0,stroke:#e8744f,stroke-width:2px,color:#333
+    style SD fill:#e0f5e8,stroke:#50b878,stroke-width:2px,color:#333
+    style AD fill:#f0e6f6,stroke:#9b59b6,stroke-width:2px,color:#333
+    style EX fill:#f0f0f0,stroke:#888,stroke-width:1px,color:#333
+</div>
+
+<div class="legend">
+  <div class="legend-item">
+    <div class="legend-swatch" style="background:#4a90d9"></div>
+    Shared Kernel
+  </div>
+  <div class="legend-item">
+    <div class="legend-swatch" style="background:#e8744f"></div>
+    Core Domain
+  </div>
+  <div class="legend-item">
+    <div class="legend-swatch" style="background:#50b878"></div>
+    Supporting Domain
+  </div>
+  <div class="legend-item">
+    <div class="legend-swatch" style="background:#9b59b6"></div>
+    Adapter Layer
+  </div>
+  <div class="legend-item">
+    <div class="legend-swatch" style="background:#888"></div>
+    External Domain
+  </div>
+  <div class="legend-item">
+    <span style="font-family:monospace">---&gt;</span>
+    Domain dependency
+  </div>
+  <div class="legend-item">
+    <span style="font-family:monospace">-.-&gt;</span>
+    Shared kernel usage
+  </div>
+  <div class="legend-item">
+    <span style="font-family:monospace">-.-</span>
+    External adapter
+  </div>
+</div>
+
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'default',
+    flowchart: {
+      useMaxWidth: false,
+      htmlLabels: true,
+      curve: 'basis'
+    }
+  });
+</script>
+</body>
+</html>

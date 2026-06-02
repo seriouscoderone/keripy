@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BC-5 Infrastructure Services — Concept Map</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: #0d1117;
+    color: #c9d1d9;
+    min-height: 100vh;
+  }
+  header {
+    padding: 24px 32px 16px;
+    border-bottom: 1px solid #21262d;
+  }
+  header h1 {
+    font-size: 1.6rem;
+    font-weight: 600;
+    color: #f0f6fc;
+    margin-bottom: 4px;
+  }
+  header p {
+    font-size: 0.85rem;
+    color: #8b949e;
+  }
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    padding: 12px 32px;
+    border-bottom: 1px solid #21262d;
+    font-size: 0.8rem;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .legend-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    border: 1px solid #30363d;
+  }
+  .diagram-container {
+    width: 100%;
+    padding: 24px 16px;
+    overflow-x: auto;
+  }
+  .diagram-container .mermaid {
+    display: flex;
+    justify-content: center;
+  }
+  .diagram-container .mermaid svg {
+    max-width: 100%;
+    height: auto;
+  }
+  .notes {
+    padding: 16px 32px 32px;
+    border-top: 1px solid #21262d;
+    font-size: 0.8rem;
+    color: #8b949e;
+    max-width: 1200px;
+  }
+  .notes h3 {
+    color: #c9d1d9;
+    font-size: 0.9rem;
+    margin-bottom: 8px;
+  }
+  .notes table {
+    border-collapse: collapse;
+    width: 100%;
+    margin-top: 8px;
+  }
+  .notes th, .notes td {
+    text-align: left;
+    padding: 4px 12px;
+    border: 1px solid #21262d;
+  }
+  .notes th {
+    background: #161b22;
+    color: #c9d1d9;
+    font-weight: 600;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>BC-5: Infrastructure Services — Complete Concept Map</h1>
+  <p>DDD Specification (ddd-spec_2.md) &mdash; 10 classified concepts, 3 envelope composites, cross-BC dependencies</p>
+</header>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-swatch" style="background:#388bfd"></div> Envelope composite (Witness, Watcher, OOBI)</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#3fb950"></div> BC-5 leaf concept</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#f0883e"></div> Cross-BC dependency (imported)</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#8b949e"></div> Data record / value object</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#da3633"></div> Violation (V09, V10, V11)</div>
+</div>
+
+<div class="diagram-container">
+<pre class="mermaid">
+graph TB
+    %% ── Styling ──
+    classDef envelope fill:#1a3a5c,stroke:#388bfd,stroke-width:2px,color:#f0f6fc
+    classDef leaf fill:#1a3324,stroke:#3fb950,stroke-width:2px,color:#f0f6fc
+    classDef crossbc fill:#3d2200,stroke:#f0883e,stroke-width:2px,color:#f0f6fc
+    classDef data fill:#1c1c1c,stroke:#8b949e,stroke-width:1px,color:#c9d1d9
+    classDef violation fill:#3d0a0a,stroke:#da3633,stroke-width:2px,color:#f0f6fc,stroke-dasharray:5 5
+
+    %% ═══════════════════════════════════════════
+    %% BC-5 ENVELOPE COMPOSITES (3)
+    %% ═══════════════════════════════════════════
+
+    subgraph WITNESS_ENV["<b>Witness</b> &nbsp;|&nbsp; core &bull; complex &bull; composite &nbsp;|&nbsp; app/indirecting.py"]
+        direction TB
+        WR["<b>WitnessReceiptor</b><br/><i>core | non-trivial</i><br/>app/agenting.py<br/><br/>Collects events, sends to<br/>witnesses for receipting"]
+        WP["<b>WitnessPublisher</b><br/><i>core | non-trivial</i><br/>app/agenting.py<br/><br/>Publishes completed receipts,<br/>monitors TOAD quorum"]
+        WI_W["<b>WitnessInquisitor</b><br/><i>core | non-trivial</i><br/>app/agenting.py<br/><br/>Queries peer witnesses<br/>for missing receipts"]
+        KVY_W["<b>Kevery</b><br/><i>BC-1 import</i><br/><br/>Own event validator:<br/>verify before receipting"]
+    end
+
+    subgraph WATCHER_ENV["<b>Watcher</b> &nbsp;|&nbsp; core &bull; substantive &bull; composite &nbsp;|&nbsp; app/watching.py"]
+        direction TB
+        ADJ["<b>Adjudicator</b><br/><i>core | non-trivial</i><br/>app/watching.py:37<br/><br/>Compares KSN records from<br/>watchers vs local Kever.<br/>Emits: consistent, lagging,<br/>update, duplicitous cues"]
+        WI_A["<b>WitnessInquisitor</b><br/><i>shared with Witness</i><br/><br/>Polls watched AID KELs<br/>from witnesses"]
+        KVY_A["<b>Kevery</b><br/><i>BC-1 import</i><br/><br/>Validator-mode processor<br/>for watched AIDs"]
+    end
+
+    subgraph OOBI_ENV["<b>OOBI</b> &nbsp;|&nbsp; core &bull; substantive &bull; composite &nbsp;|&nbsp; app/oobiing.py"]
+        direction TB
+        OBY["<b>Oobiery</b><br/><i>core | substantive</i><br/>app/oobiing.py:271<br/><br/>Resolution pipeline:<br/>fetch URL &rarr; parse &rarr;<br/>validate &rarr; store.<br/>30s retry on failure"]
+        KVY_O["<b>Kevery</b><br/><i>BC-1 import</i><br/><br/>Validates returned<br/>key event stream"]
+        OBR["<b>OobiRecord</b><br/><i>value object</i><br/>recording.py:214<br/><br/>URL + AID + role +<br/>status: resolved|failed"]
+        EPR["<b>EndpointRecord</b><br/><i>value object</i><br/>recording.py:229<br/><br/>AID + role + scheme<br/>+ URL endpoint"]
+    end
+
+    %% ═══════════════════════════════════════════
+    %% BC-5 STANDALONE CONCEPTS (2)
+    %% ═══════════════════════════════════════════
+
+    MBX["<b>Mailbox</b><br/><i>peripheral | non-trivial</i><br/>app/storing.py<br/><br/>Topic-keyed persistent queue<br/>(Baser.mbx). Async delivery<br/>for offline witnesses &amp;<br/>multi-sig coordination"]
+
+    RCP["<b>Receiptor</b><br/><i>core | substantive</i><br/>app/agenting.py:27<br/><br/>Controller-side witness<br/>receipt orchestration.<br/>witDo: send KEL to witnesses,<br/>propagate receipts across pool.<br/>gitDo: query specific receipts"]
+
+    %% ═══════════════════════════════════════════
+    %% CROSS-BC DEPENDENCIES
+    %% ═══════════════════════════════════════════
+
+    KVR["<b>Kever</b><br/><i>BC-1 shared read-only</i><br/>core/eventing.py:1586<br/><br/>AID key state<br/>(wits, sn, verfers)"]
+
+    PSR["<b>Parser</b><br/><i>BC-1</i><br/>core/parsing.py<br/><br/>CESR message stream<br/>deserialization"]
+
+    BSR["<b>Baser</b><br/><i>BC-4 shared kernel</i><br/>db/basing.py<br/><br/>LMDB event database<br/>(KEL, receipts, mbx)"]
+
+    HAB["<b>Hab / Habery</b><br/><i>BC-2 Key Mgmt</i><br/>app/habbing.py<br/><br/>AID context &amp;<br/>signing authority"]
+
+    %% ═══════════════════════════════════════════
+    %% VIOLATION MARKERS
+    %% ═══════════════════════════════════════════
+
+    V09["<b>V09</b> &mdash; No named<br/>Witness class.<br/>WitnessStart is<br/>the DoDoer envelope"]
+
+    V10["<b>V10</b> &mdash; No named<br/>Watcher class.<br/>Adjudicator exists<br/>but not the composite"]
+
+    V11["<b>V11</b> &mdash; falcon<br/>imported in oobiing.py.<br/>HTTP transport leaks<br/>into domain logic"]
+
+    %% ═══════════════════════════════════════════
+    %% COMPOSITION EDGES (assembles)
+    %% ═══════════════════════════════════════════
+
+    %% Receiptor interacts with Witness components
+    RCP -- "sends events to<br/>witness pool" --> WR
+    RCP -- "queries specific<br/>receipts by sn" --> WI_W
+
+    %% Mailbox serves Witness and Watcher
+    WP -- "delivers receipts<br/>via" --> MBX
+    MBX -- "consumed by<br/>offline controllers" --> RCP
+
+    %% Oobiery pipeline
+    OBY -- "validates via" --> KVY_O
+    OBY -- "writes" --> OBR
+    OBY -- "writes" --> EPR
+    OBY -- "parses response<br/>with" --> PSR
+
+    %% Watcher uses Adjudicator
+    ADJ -- "reads key state<br/>from" --> KVR
+    WI_A -- "fetches KELs<br/>from witnesses" --> WR
+
+    %% ═══════════════════════════════════════════
+    %% CROSS-BC DEPENDENCY EDGES
+    %% ═══════════════════════════════════════════
+
+    KVY_W -. "BC-1" .-> KVR
+    KVY_A -. "BC-1" .-> KVR
+    KVY_O -. "BC-1" .-> KVR
+
+    WR -. "persists receipts<br/>in" .-> BSR
+    WP -. "reads receipt<br/>quorum from" .-> BSR
+    MBX -. "backed by<br/>Baser.mbx" .-> BSR
+    OBR -. "stored in" .-> BSR
+    EPR -. "stored in" .-> BSR
+
+    RCP -. "signs with" .-> HAB
+    WR -. "signs receipts<br/>with" .-> HAB
+
+    %% ═══════════════════════════════════════════
+    %% VIOLATION EDGES
+    %% ═══════════════════════════════════════════
+
+    V09 -.- WITNESS_ENV
+    V10 -.- WATCHER_ENV
+    V11 -.- OOBI_ENV
+
+    %% ═══════════════════════════════════════════
+    %% SHARED COMPONENT: WitnessInquisitor
+    %% ═══════════════════════════════════════════
+
+    WI_W ~~~ WI_A
+
+    %% ── Apply classes ──
+    class WITNESS_ENV,WATCHER_ENV,OOBI_ENV envelope
+    class WR,WP,WI_W,WI_A,ADJ,OBY,MBX,RCP leaf
+    class KVY_W,KVY_A,KVY_O,KVR,PSR,BSR,HAB crossbc
+    class OBR,EPR data
+    class V09,V10,V11 violation
+</pre>
+</div>
+
+<div class="notes">
+  <h3>BC-5 Complete Concept Registry (10 concepts)</h3>
+  <table>
+    <tr><th>#</th><th>Concept</th><th>Centrality</th><th>Weight</th><th>Pass</th><th>File Owner</th><th>Role</th></tr>
+    <tr><td>1</td><td>Witness</td><td>core</td><td>complex</td><td>1</td><td>app/indirecting.py</td><td>Envelope: receipts events, runs KAWA via 3 sub-Doers + Kevery</td></tr>
+    <tr><td>2</td><td>Watcher</td><td>core</td><td>substantive</td><td>1</td><td>app/watching.py</td><td>Envelope: first-seen enforcement + duplicity detection</td></tr>
+    <tr><td>3</td><td>OOBI</td><td>core</td><td>substantive</td><td>1</td><td>app/oobiing.py</td><td>Envelope: bootstrap URL+AID discovery outside protocol stream</td></tr>
+    <tr><td>4</td><td>Mailbox</td><td>peripheral</td><td>non-trivial</td><td>1</td><td>app/storing.py</td><td>Topic-keyed async message queue for indirect-mode delivery</td></tr>
+    <tr><td>5</td><td>WitnessReceiptor</td><td>core</td><td>non-trivial</td><td>1</td><td>app/agenting.py</td><td>Witness sub-Doer: collects + sends receipts</td></tr>
+    <tr><td>6</td><td>WitnessPublisher</td><td>core</td><td>non-trivial</td><td>1</td><td>app/agenting.py</td><td>Witness sub-Doer: publishes receipts, evaluates TOAD</td></tr>
+    <tr><td>7</td><td>WitnessInquisitor</td><td>core</td><td>non-trivial</td><td>1</td><td>app/agenting.py</td><td>Shared sub-Doer: queries peers for missing receipts (Witness + Watcher)</td></tr>
+    <tr><td>8</td><td>Adjudicator</td><td>core</td><td>non-trivial</td><td>2</td><td>app/watching.py:37</td><td>Watcher leaf: compares KSN across watchers, detects duplicity</td></tr>
+    <tr><td>9</td><td>Oobiery</td><td>core</td><td>substantive</td><td>2</td><td>app/oobiing.py:271</td><td>OOBI leaf: resolution pipeline (fetch &rarr; parse &rarr; validate &rarr; store)</td></tr>
+    <tr><td>10</td><td>Receiptor</td><td>core</td><td>substantive</td><td>2</td><td>app/agenting.py:27</td><td>Controller-side witness receipt orchestration (witDo + gitDo)</td></tr>
+  </table>
+
+  <h3 style="margin-top:16px">Cross-BC Dependencies</h3>
+  <table>
+    <tr><th>Dependency</th><th>Source BC</th><th>Usage in BC-5</th></tr>
+    <tr><td>Kevery</td><td>BC-1 Event Processing</td><td>Event validation in Witness, Watcher, and OOBI envelopes</td></tr>
+    <tr><td>Kever</td><td>BC-1 (shared read-only)</td><td>Key state lookup (wits, sn, verfers) for Adjudicator + all validators</td></tr>
+    <tr><td>Parser</td><td>BC-1 Event Processing</td><td>CESR stream deserialization in Oobiery pipeline</td></tr>
+    <tr><td>Baser</td><td>BC-4 Persistence (shared kernel)</td><td>Receipt storage, mailbox (mbx), OobiRecord/EndpointRecord persistence</td></tr>
+    <tr><td>Hab / Habery</td><td>BC-2 Key Management</td><td>Receipt signing, witness identity for locally hosted witnesses</td></tr>
+  </table>
+
+  <h3 style="margin-top:16px">Open Violations (3)</h3>
+  <table>
+    <tr><th>ID</th><th>Type</th><th>Description</th></tr>
+    <tr><td>V09</td><td>Misplaced authority</td><td>No named Witness class; concept assembled by WitnessStart DoDoer in indirecting.py</td></tr>
+    <tr><td>V10</td><td>Misplaced authority</td><td>No named Watcher class; Adjudicator exists but the composite envelope does not</td></tr>
+    <tr><td>V11</td><td>Leakage (ED-4)</td><td>falcon HTTP framework imported in oobiing.py domain logic; transport leaks into OOBI resolution</td></tr>
+  </table>
+</div>
+
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: 'dark',
+  themeVariables: {
+    primaryColor: '#1a3a5c',
+    primaryTextColor: '#f0f6fc',
+    primaryBorderColor: '#388bfd',
+    lineColor: '#8b949e',
+    secondaryColor: '#1a3324',
+    tertiaryColor: '#161b22',
+    fontSize: '13px'
+  },
+  flowchart: {
+    htmlLabels: true,
+    curve: 'basis',
+    rankSpacing: 60,
+    nodeSpacing: 40,
+    padding: 12
+  }
+});
+</script>
+</body>
+</html>
