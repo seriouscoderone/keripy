@@ -188,7 +188,9 @@ def test_status_endpoint_returns_mailbox_metadata():
     assert status == 200
     data = json.loads(body)
     assert data["mailbox"].startswith("B"), data
-    assert data["alias"] == "mailbox"
+    # Aliases vary per pool member (e.g. "mailbox", "mailbox-legitim").
+    # All start with "mailbox".
+    assert data["alias"].startswith("mailbox")
     assert data["sn"] == 0       # non-trans inception only
 
 

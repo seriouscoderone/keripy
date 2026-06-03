@@ -105,7 +105,9 @@ def test_status_endpoint_returns_witness_metadata():
     assert status == 200
     data = json.loads(body)
     assert data["witness"].startswith("B"), data
-    assert data["alias"] == "witness"
+    # Aliases vary per pool member (e.g. "witness", "witness-legitim",
+    # "witness-goonei"). All start with "witness".
+    assert data["alias"].startswith("witness"), data
     assert data["sn"] == 0       # non-trans inception only
 
 
