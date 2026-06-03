@@ -95,67 +95,6 @@ def split_event_and_attachment(cesr):
     return cesr[:end], cesr[end:]
 
 
-def _make_fwd_message(sender_hab, recipient_pre, topic, embedded_msg):
-    """Build a signed /fwd exn message ready to POST to the witness.
-
-    Mirrors keripy's reference fwd construction (see
-    tests/core/test_parsing_pathed.py:39-43 and
-    keri.app.forwarding.StreamPoster._fwd at line 192).
-
-    Args:
-        sender_hab: the Hab signing the /fwd
-        recipient_pre (str): qb64 AID of the eventual recipient
-        topic (str): topic name to deposit under (e.g. "/credential")
-        embedded_msg (bytes): the inner KERI message to forward (full
-            CESR ims, including any attachments)
-
-    Returns:
-        bytes: signed /fwd exn ims (body + attachments) ready to POST
-    """
-    from keri.peer.exchanging import exchange
-    fwd_serder, fwd_end = exchange(
-        route="/fwd",
-        sender=sender_hab.pre,
-        modifiers={"pre": recipient_pre, "topic": topic},
-        payload={},
-        embeds={"msg": bytes(embedded_msg)},
-    )
-    signed = sender_hab.endorse(fwd_serder, last=False, pipelined=False)
-    signed.extend(fwd_end)
-    return bytes(signed)
-
-
-def _make_mbx_query(querier_hab, recipient_pre, topics, witness_pre):
-    """Build a signed `qry r=mbx` message ready to POST to the witness.
-
-    Mirrors the reference Poller construction at
-    keri/app/indirecting.py:809-811:
-
-        q = dict(pre=self.pre, topics=self.topics.topics)
-        msg = hab.query(pre=self.pre, src=self.witness,
-                        route="mbx", query=q)
-
-    Args:
-        querier_hab: the Hab signing the query (typically the recipient
-            asking for their own mailbox)
-        recipient_pre (str): the AID whose mailbox to read (typically
-            the same as querier_hab.pre)
-        topics (dict): {topic_name: last_seen_ordinal}
-        witness_pre (str): qb64 of the attester being queried (the
-            witness AID)
-
-    Returns:
-        bytes: signed qry ims ready to POST
-    """
-    q = dict(pre=recipient_pre, topics=topics)
-    return bytes(querier_hab.query(
-        pre=recipient_pre,
-        src=witness_pre,
-        route="mbx",
-        query=q,
-    ))
-
-
 # ---------------------------------------------------------------------------
 # tests
 # ---------------------------------------------------------------------------
@@ -235,7 +174,19 @@ def test_unknown_aid_returns_404(witness_pre):
 
 
 def test_post_receipts_returns_signed_witness_receipt(fresh_hby, witness_pre):
-    """A controller posts its inception; witness returns a verifiable receipt."""
+    """A controller posts its inception; witness returns a verifiable receipt.
+
+    Regression guard for kerihost issues #3 and #7. The witness must:
+      - Accept the inception event (controller signature is the only
+        cryptographic gate at first-seen)
+      - First-see it (not park in misfit/partial-witness escrow on the
+        grounds that the witness is "locally witnessed" — see #7 for
+        why a non-local lax Kevery breaks this; we use _hby.psr instead)
+      - Issue and return its own signed receipt CESR in the response body
+
+    If this test ever asserts on a 204 / empty body, the witness handler's
+    Kevery configuration has regressed (likely the local/lax flags).
+    """
     # 1. Resolve OOBI so we know the witness's verfer for later verification.
     _, _, oobi = http_get(f"/oobi/{witness_pre}/witness")
     fresh_hby.psr.parse(ims=bytearray(oobi))
@@ -248,7 +199,7 @@ def test_post_receipts_returns_signed_witness_receipt(fresh_hby, witness_pre):
     )
 
     # 3. POST bob's inception to /receipts.
-    status, headers, rct_bytes = http_post_cesr("/receipts", bob.makeOwnInception())
+    status, headers, rct_bytes = http_post_cesr("/receipts", bob.msgOwnInception())
     assert status == 200
     assert headers["Content-Type"] == "application/cesr"
     assert b'"t":"rct"' in rct_bytes, (
@@ -295,7 +246,7 @@ def test_post_root_returns_synchronous_witness_receipt(fresh_hby, witness_pre):
         toad=1, wits=[witness_pre],
     )
 
-    status, headers, rct_bytes = http_post_cesr("/", bob.makeOwnInception())
+    status, headers, rct_bytes = http_post_cesr("/", bob.msgOwnInception())
     assert status == 200, f"POST / returned {status}, expected 200 with receipt body"
     assert headers["Content-Type"] == "application/cesr"
     assert b'"t":"rct"' in rct_bytes, (
@@ -339,7 +290,7 @@ def test_post_root_handles_attachment_group_wrapper(fresh_hby, witness_pre):
         isith="1", icount=1, ncount=1, nsith="1",
         toad=1, wits=[witness_pre],
     )
-    full = bytes(bob.makeOwnInception())
+    full = bytes(bob.msgOwnInception())
 
     # Split full CESR into body=event-JSON and raw_attach=trailing CESR
     nesting, end = 0, 0
@@ -431,7 +382,7 @@ def test_post_receipts_kli_format(fresh_hby, witness_pre):
         toad=1, wits=[witness_pre],
     )
 
-    body, attachment = split_event_and_attachment(bob.makeOwnInception())
+    body, attachment = split_event_and_attachment(bob.msgOwnInception())
     assert len(body) > 0
     assert len(attachment) > 0
     assert attachment.startswith(b"-"), f"unexpected attachment prefix: {attachment[:10]!r}"
@@ -476,7 +427,7 @@ def test_get_receipts_after_post(fresh_hby, witness_pre):
     )
 
     # POST bob's inception in kli/streamCESRRequests format.
-    body, attachment = split_event_and_attachment(bob.makeOwnInception())
+    body, attachment = split_event_and_attachment(bob.msgOwnInception())
     req = urllib.request.Request(
         f"{WITNESS_URL}/receipts",
         data=body,
@@ -527,7 +478,7 @@ def test_post_does_not_receipt_unrelated_aid(fresh_hby, witness_pre):
         f"test setup error: bob should have no wits, got {bob.kever.wits}"
     )
 
-    status, _, body = http_post_cesr("/receipts", bob.makeOwnInception())
+    status, _, body = http_post_cesr("/receipts", bob.msgOwnInception())
     # Either 204 (no receipt produced) is the expected success case; if
     # the witness does return a 200 it must NOT contain a receipt.
     assert status in (200, 204), f"expected 200 or 204, got {status}"
@@ -537,30 +488,26 @@ def test_post_does_not_receipt_unrelated_aid(fresh_hby, witness_pre):
     )
 
 
-def test_oobi_advertises_mailbox_role(fresh_hby, witness_pre):
-    """The witness's OOBI advertises Roles.mailbox alongside
-    Roles.controller.
+def test_oobi_does_not_advertise_mailbox_role(fresh_hby, witness_pre):
+    """The stripped witness must NOT advertise role=mailbox.
 
-    Verifies Phase 3 init() additively registers the mailbox role.
-    A KERI agent resolving the bare /oobi (default role) gets KEL +
-    /loc/scheme + both /end/role/add records.
+    Regression guard for the role split: mailbox is served by the
+    separate sam-mailbox stack now. Issue #6/#7-adjacent: we publish
+    /end/role/cut for the historical mailbox-role rpy on cold-start to
+    retire any prior add. The OOBI reply must reflect that.
     """
     _, _, oobi = http_get("/oobi")
-    fresh_hby.psr.parse(ims=bytearray(oobi))
+    assert b'"role":"mailbox"' not in oobi, (
+        "witness still advertises mailbox role after strip — "
+        "/end/role/cut on cold-start may not have published"
+    )
 
+    fresh_hby.psr.parse(ims=bytearray(oobi))
     assert witness_pre in fresh_hby.kevers, "witness KEL not registered"
 
-    # Mailbox role authorization
-    end_mbx = fresh_hby.db.ends.get(keys=(witness_pre, "mailbox", witness_pre))
-    assert end_mbx is not None, (
-        "no /end/role/add for role=mailbox in db.ends"
-    )
-
-    # Controller role still there too (Phase 1 regression guard)
+    # Controller + witness roles still present (positive regression guard)
     end_ctrl = fresh_hby.db.ends.get(keys=(witness_pre, "controller", witness_pre))
-    assert end_ctrl is not None, (
-        "controller-role authorization regressed"
-    )
+    assert end_ctrl is not None, "controller-role authorization regressed"
 
 
 def test_oobi_witness_role_returns_witness_end_role(fresh_hby, witness_pre):
@@ -589,185 +536,3 @@ def test_oobi_witness_role_returns_witness_end_role(fresh_hby, witness_pre):
         "no /loc/scheme reply in OOBI"
     )
 
-
-def test_post_fwd_stores_in_mailbox(fresh_hby, witness_pre):
-    """Round-trip: alice POSTs /fwd to witness; bob POSTs qry r=/mbx
-    and receives the message via SSE.
-
-    Verifies:
-      - Phase 3 ForwardHandler registration routes /fwd to
-        Mailboxer.storeMsg.
-      - Phase 3 handle_cesr_ingest branch returns SSE for qry r=/mbx.
-      - Topic key construction matches between writer (ForwardHandler)
-        and reader (_format_sse_events).
-    """
-    # Resolve the witness OOBI so our local hby knows its keys
-    _, _, oobi = http_get(f"/oobi/{witness_pre}/witness")
-    fresh_hby.psr.parse(ims=bytearray(oobi))
-
-    # Alice (sender) and Bob (recipient) -- Bob's mailbox is the witness.
-    alice = fresh_hby.makeHab(name="alice", transferable=True,
-                              isith="1", icount=1, ncount=1, nsith="1")
-    bob = fresh_hby.makeHab(name="bob", transferable=True,
-                            isith="1", icount=1, ncount=1, nsith="1")
-
-    # Publish alice's KEL to the witness so the Exchanger can verify her
-    # signature on the /fwd exn. Without this the witness has no kever
-    # for alice and silently drops the exn (Parser swallows the
-    # MissingSignatureError at parsing.py:484).
-    status_a, _, _ = http_post_cesr("/", alice.makeOwnInception())
-    assert status_a == 204, f"alice icp publish failed: {status_a}"
-
-    # Build a small embedded message -- bob's own inception will do for the
-    # test. The witness doesn't validate the embed semantically; it just
-    # stores the bytes.
-    embedded = bob.makeOwnInception()
-
-    # Alice forwards to Bob's /credential topic
-    fwd_ims = _make_fwd_message(
-        sender_hab=alice,
-        recipient_pre=bob.pre,
-        topic="/credential",
-        embedded_msg=embedded,
-    )
-    status, _, body = http_post_cesr("/", fwd_ims)
-    assert status == 204, f"expected 204 from /fwd POST, got {status}"
-
-    # Bob polls his mailbox for the credential topic
-    qry_ims = _make_mbx_query(
-        querier_hab=bob,
-        recipient_pre=bob.pre,
-        topics={"/credential": -1},
-        witness_pre=witness_pre,
-    )
-    status2, headers2, body2 = http_post_cesr("/", qry_ims)
-    assert status2 == 200, f"expected 200 from qry r=/mbx, got {status2}"
-    assert headers2.get("Content-Type") == "text/event-stream", (
-        f"expected text/event-stream, got {headers2.get('Content-Type')!r}"
-    )
-
-    # SSE body should contain at least one event with the expected fields
-    body2_text = body2.decode("utf-8") if isinstance(body2, (bytes, bytearray)) else body2
-    assert "event: /credential" in body2_text, (
-        f"missing event:/credential in SSE body: {body2_text[:200]!r}"
-    )
-    assert "id: 0" in body2_text, (
-        f"missing id:0 (first message ordinal) in SSE body: {body2_text[:200]!r}"
-    )
-
-
-def test_mbx_query_empty_returns_sse_with_empty_body(fresh_hby, witness_pre):
-    """A qry r=/mbx for an AID with no buffered messages returns
-    `200 + text/event-stream + empty body`.
-
-    Verifies that the SSE branch doesn't crash on empty topics.
-    """
-    _, _, oobi = http_get(f"/oobi/{witness_pre}/witness")
-    fresh_hby.psr.parse(ims=bytearray(oobi))
-
-    bob = fresh_hby.makeHab(name="bob", transferable=True,
-                            isith="1", icount=1, ncount=1, nsith="1")
-
-    qry_ims = _make_mbx_query(
-        querier_hab=bob,
-        recipient_pre=bob.pre,
-        topics={"/credential": -1, "/receipt": -1},
-        witness_pre=witness_pre,
-    )
-    status, headers, body = http_post_cesr("/", qry_ims)
-    assert status == 200, f"expected 200, got {status}"
-    assert headers.get("Content-Type") == "text/event-stream", (
-        f"expected text/event-stream, got {headers.get('Content-Type')!r}"
-    )
-    body_text = body.decode("utf-8") if isinstance(body, (bytes, bytearray)) else body
-    assert body_text == "", (
-        f"expected empty SSE body, got {body_text[:200]!r}"
-    )
-
-
-def test_mbx_query_resumes_from_last_ordinal(fresh_hby, witness_pre):
-    """Two messages stored under the same topic are retrievable in
-    order, and the second can be fetched independently using the
-    cursor ordinal.
-
-    Verifies fn = last_seen + 1 cursor semantics in _format_sse_events.
-    """
-    _, _, oobi = http_get(f"/oobi/{witness_pre}/witness")
-    fresh_hby.psr.parse(ims=bytearray(oobi))
-
-    alice = fresh_hby.makeHab(name="alice", transferable=True,
-                              isith="1", icount=1, ncount=1, nsith="1")
-    bob = fresh_hby.makeHab(name="bob", transferable=True,
-                            isith="1", icount=1, ncount=1, nsith="1")
-
-    # Witness must know alice to verify her sigs on the /fwd exns.
-    status_a, _, _ = http_post_cesr("/", alice.makeOwnInception())
-    assert status_a == 204, f"alice icp publish failed: {status_a}"
-
-    # Use two different embedded messages so we can tell them apart
-    msg_a = bob.makeOwnInception()
-    msg_b = bob.rotate()
-
-    for embedded in (msg_a, msg_b):
-        fwd = _make_fwd_message(alice, bob.pre, "/credential", embedded)
-        status, _, _ = http_post_cesr("/", fwd)
-        assert status == 204, f"/fwd POST returned {status}"
-
-    # First poll: last_seen=-1 should return BOTH messages
-    qry1 = _make_mbx_query(bob, bob.pre, {"/credential": -1},
-                           witness_pre=witness_pre)
-    s1, _, body1 = http_post_cesr("/", qry1)
-    assert s1 == 200
-    body1_text = body1.decode("utf-8") if isinstance(body1, (bytes, bytearray)) else body1
-    assert "id: 0" in body1_text, f"missing id:0 in {body1_text[:200]!r}"
-    assert "id: 1" in body1_text, f"missing id:1 in {body1_text[:200]!r}"
-
-    # Second poll: last_seen=0 should return only the SECOND message
-    qry2 = _make_mbx_query(bob, bob.pre, {"/credential": 0},
-                           witness_pre=witness_pre)
-    s2, _, body2 = http_post_cesr("/", qry2)
-    assert s2 == 200
-    body2_text = body2.decode("utf-8") if isinstance(body2, (bytes, bytearray)) else body2
-    assert "id: 1" in body2_text, f"missing id:1 in {body2_text[:200]!r}"
-    assert "id: 0" not in body2_text, (
-        f"id:0 should not appear when last_seen=0: {body2_text[:200]!r}"
-    )
-
-
-def test_mbx_query_missing_q_pre_returns_400(fresh_hby, witness_pre):
-    """A qry r=/mbx with `q.topics` but no `q.pre` returns 400 with
-    the documented error.
-
-    Verifies the validation guard inside handle_cesr_ingest's mbx
-    branch.
-    """
-    _, _, oobi = http_get(f"/oobi/{witness_pre}/witness")
-    fresh_hby.psr.parse(ims=bytearray(oobi))
-
-    bob = fresh_hby.makeHab(name="bob", transferable=True,
-                            isith="1", icount=1, ncount=1, nsith="1")
-
-    # Build a signed qry r=mbx with q.topics but no q.pre. Hab.query
-    # only sets q["i"] and q["src"], not q["pre"], so omitting pre
-    # from the query dict produces exactly the malformed shape we want
-    # to verify the handler rejects.
-    qry = bytes(bob.query(
-        pre=bob.pre,
-        src=witness_pre,
-        route="mbx",
-        query={"topics": {"/credential": -1}},  # NOTE: no "pre"
-    ))
-
-    try:
-        status, _, body = http_post_cesr("/", qry)
-        # If urlopen returned without raising, we expect a 4xx body
-        assert status == 400, f"expected 400, got {status}"
-        data = json.loads(body) if body else {}
-        assert "q.pre" in data.get("error", ""), (
-            f"expected q.pre in error message: {data!r}"
-        )
-    except urllib.error.HTTPError as e:
-        # urlopen raises on 4xx -- that's fine too
-        assert e.code == 400, f"expected 400, got {e.code}"
-        data = json.loads(e.read())
-        assert "q.pre" in data.get("error", "")
