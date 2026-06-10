@@ -1443,7 +1443,7 @@ from keri.app.habbing import Habery
 from keri.core.signing import Salter
 from keri.core import scheming
 from keri.kering import Kinds
-from keri.vc import protocoling
+from keri.peer import exchanging
 
 from serviceaid import runtime
 from serviceaid.config import Config
@@ -1488,8 +1488,8 @@ def test_full_request_returns_verifiable_grant(monkeypatch):
         # Caller builds a self-contained CESR exn: their KEL + a signed /rate/apply exn.
         caller_hby = Habery(name="caller", temp=True, salt=Salter(raw=b'caller9876543210').qb64)
         caller = caller_hby.makeHab(name="caller", transferable=True)
-        exn, _ = protocoling.exchange(route="/rate/apply",
-                                      payload={"risk": 72}, sender=caller.pre)
+        exn, _ = exchanging.exchange(route="/rate/apply",
+                                     attributes={"risk": 72}, sender=caller.pre)
         # Sign + assemble: caller's KEL (so the service can verify) + exn + sigs.
         ims = bytearray(caller.makeOwnEvent(sn=0))     # caller inception (KEL)
         ims.extend(caller.endorse(exn, last=False))    # exn + attached signatures
@@ -1533,15 +1533,15 @@ def test_duplicate_message_is_idempotent(monkeypatch):
 
         caller_hby = Habery(name="caller", temp=True, salt=Salter(raw=b'caller9876543210').qb64)
         caller = caller_hby.makeHab(name="caller", transferable=True)
-        exn, _ = protocoling.exchange(route="/rate/apply", payload={"risk": 5}, sender=caller.pre)
+        exn, _ = exchanging.exchange(route="/rate/apply", attributes={"risk": 5}, sender=caller.pre)
         ims = bytearray(caller.makeOwnEvent(sn=0)); ims.extend(caller.endorse(exn, last=False))
         event = {"path": "/rate/apply", "httpMethod": "POST",
                  "body": base64.b64encode(bytes(ims)).decode(), "isBase64Encoded": True}
 
         r1 = H.handler(event, None)
-        n_creds_after_first = len(list(state.rgy.reger.creds.getItemIter()))
+        n_creds_after_first = len(list(state.rgy.reger.creds.getTopItemIter()))
         r2 = H.handler(event, None)              # duplicate exn SAID
-        n_creds_after_second = len(list(state.rgy.reger.creds.getItemIter()))
+        n_creds_after_second = len(list(state.rgy.reger.creds.getTopItemIter()))
         assert r1["statusCode"] == 200 and r2["statusCode"] == 200
         assert n_creds_after_first == n_creds_after_second   # no re-issue
         caller_hby.close()
@@ -1595,6 +1595,12 @@ def _json_response(status, obj):
 
 
 def handler(event, context):
+    # CloudFormation Custom Resource events (inception) share this Lambda.
+    # They carry RequestType instead of httpMethod — delegate before HTTP routing.
+    if "RequestType" in event:
+        from .cdk.inception import on_event
+        return on_event(event, context)
+
     state = runtime.init()
     method = event.get("httpMethod", "GET")
     path = (event.get("path", "/") or "/").rstrip("/") or "/"
@@ -1669,7 +1675,7 @@ def handler(event, context):
 Run: `.venv/bin/python -m pytest service-aid/tests/test_handler_e2e.py -v`
 Expected: PASS (2 passed).
 
-This is the riskiest integration point. If the caller-side assembly (`makeOwnEvent` / `endorse` / `protocoling.exchange`) differs in this fork, mirror exactly how `sam-witness/test_live.py` builds and submits self-contained CESR, and how Locksmith builds an `exn` in `src/locksmith/core/ipexing.py`. Use the systematic-debugging skill; do not weaken the assertion that the grant's ACDC verifies in a fresh consumer Habery — that is the proof the whole pipeline works.
+This is the riskiest integration point. If the caller-side assembly (`makeOwnEvent` / `endorse` / `exchanging.exchange` — note `attributes=`, not `payload=`; it returns `(serder, end)`) differs in this fork, mirror exactly how `sam-witness/test_live.py` builds and submits self-contained CESR, and how Locksmith builds an `exn` in `src/locksmith/core/ipexing.py`. Use the systematic-debugging skill; do not weaken the assertion that the grant's ACDC verifies in a fresh consumer Habery — that is the proof the whole pipeline works.
 
 - [ ] **Step 5: Run the whole framework suite + the keripy namespacing test together**
 
@@ -2065,10 +2071,12 @@ def test_service_aid_construct_provisions_lambda_apigw_keeper():
                witnesses=["BWit1", "BWit2"], toad=2,
                image_directory=".")  # synth-only; image not built in test
     t = Template.from_stack(stack)
-    t.resource_count_is("AWS::Lambda::Function", 1)        # the service function
+    # cr.Provider synthesizes its own framework Lambda(s), so don't count
+    # functions — assert the service function exists by name/env instead.
     t.resource_count_is("AWS::DynamoDB::Table", 1)         # isolated keeper table
     t.resource_count_is("AWS::SecretsManager::Secret", 1)  # keeper bran
     t.has_resource_properties("AWS::Lambda::Function", {
+        "FunctionName": "rating-serviceaid",
         "Environment": {"Variables": {"SERVICEAID_ALIAS": "rating"}}
     })
 ```
@@ -2194,7 +2202,7 @@ __all__ = ["KeriCoreStack", "ServiceAid"]
 Run: `.venv/bin/python -m pytest service-aid/tests/test_cdk_synth.py -v`
 Expected: PASS (2 passed).
 
-The inception Custom Resource reuses the service function as its `on_event_handler`; the function's `bootstrap.handler` must therefore answer both API Gateway events (HTTP) and Custom Resource events (which carry `RequestType`). If keeping both in one Lambda proves awkward at synth/runtime, split into a dedicated inception function whose `CMD` is `["serviceaid.cdk.inception.on_event"]` — note this in the construct and adjust the test's Lambda count to 2.
+The inception Custom Resource reuses the service function as its `on_event_handler`. This works because `serviceaid.handler.handler` (Task 8) routes by event shape: events carrying `RequestType` (CloudFormation) are delegated to `inception.on_event` before any HTTP routing. Note that `cr.Provider` synthesizes its own framework Lambda, so the synth test's count of 1 refers to functions with our container image; if the assertion fails on the provider's extra function, match on `FunctionName: "rating-serviceaid"` instead of counting.
 
 - [ ] **Step 5: Commit**
 
@@ -2403,7 +2411,7 @@ def test_request_against_dynamodb_local(monkeypatch):
     from keri.core.signing import Salter
     from keri.core import scheming
     from keri.kering import Kinds
-    from keri.vc import protocoling
+    from keri.peer import exchanging
     from serviceaid import runtime, handler as H
     from serviceaid.config import Config
     from serviceaid.contract import service, Reply
@@ -2429,7 +2437,7 @@ def test_request_against_dynamodb_local(monkeypatch):
 
     caller_hby = Habery(name="caller", temp=True, salt=Salter(raw=b'caller9876543210').qb64)
     caller = caller_hby.makeHab(name="caller", transferable=True)
-    exn, _ = protocoling.exchange(route="/rate/apply", payload={"risk": 7}, sender=caller.pre)
+    exn, _ = exchanging.exchange(route="/rate/apply", attributes={"risk": 7}, sender=caller.pre)
     ims = bytearray(caller.makeOwnEvent(sn=0)); ims.extend(caller.endorse(exn, last=False))
     event = {"path": "/rate/apply", "httpMethod": "POST",
              "body": base64.b64encode(bytes(ims)).decode(), "isBase64Encoded": True}
