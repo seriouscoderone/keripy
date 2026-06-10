@@ -159,3 +159,6 @@ sam-mailbox/samconfig.local.toml
 *.local.sh
 sam-*/deploy.local.sh
 sam-*/params.local.json
+
+# git worktrees (agent-isolated workspaces)
+.worktrees/
