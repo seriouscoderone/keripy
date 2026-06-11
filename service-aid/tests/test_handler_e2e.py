@@ -6,6 +6,7 @@ grant that a FRESH consumer Habery accepts through its own Parser/Exchanger
 stack (signature verification included) — the proof of the whole pipeline.
 """
 import base64
+import json
 
 import pytest
 
@@ -59,6 +60,30 @@ def _caller_request(route: str, attributes: dict) -> tuple[Habery, object, dict]
              "body": base64.b64encode(bytes(ims)).decode(),
              "isBase64Encoded": True}
     return caller_hby, caller, event
+
+
+def _init_rating_service(score=None):
+    """Moto-side service setup: bran secret + /rate/apply command + schema.
+
+    Must run inside an active mock_aws() context. Returns the RuntimeState.
+    """
+    import boto3
+    sm = boto3.client("secretsmanager", region_name="us-east-1")
+    sm.create_secret(Name="rating/bran", SecretString="z" * 21)
+
+    runtime.reset()
+    service._commands.clear()
+    service.schemas.clear()
+    schemer = scheming.Schemer(sed=dict(RATING_SCHEMA_SAD), kind=Kinds.json)
+
+    @service.command(route="/rate/apply", issues=schemer.said)
+    def rate(req):
+        val = score if score is not None else req.payload.get("risk", 0) * 10
+        return Reply.acdc(recipient=req.sender, attributes={"score": val})
+
+    state = runtime.init(_cfg())
+    state.hby.db.schema.pin(keys=(schemer.said,), val=schemer)
+    return state
 
 
 @needs_moto
@@ -152,5 +177,71 @@ def test_duplicate_message_is_idempotent(monkeypatch):
             n_creds_after_second = len(list(state.rgy.reger.creds.getTopItemIter()))
             assert r1["statusCode"] == 200 and r2["statusCode"] == 200
             assert n_creds_after_first == n_creds_after_second   # no re-issue
+            # The replay is a JSON duplicate ack, NOT a re-sent grant, and the
+            # duplicate marker must survive the merge with the cached summary.
+            assert r2["headers"]["Content-Type"] == "application/json"
+            assert json.loads(r2["body"])["status"] == "duplicate"
+        finally:
+            caller_hby.close()
+
+
+@needs_moto
+def test_malformed_base64_body_returns_400():
+    with mock_aws():
+        _init_rating_service()
+        from serviceaid import handler as H
+
+        resp = H.handler({"path": "/rate/apply", "httpMethod": "POST",
+                          "body": "a", "isBase64Encoded": True}, None)
+
+        assert resp["statusCode"] == 400
+        assert json.loads(resp["body"])["error"] == "invalid base64 body"
+
+
+@needs_moto
+def test_unanchored_signature_returns_400():
+    """An exn WITHOUT the caller's KEL cannot verify (no key state to anchor
+    the signatures) — keripy's Parser swallows the MissingSignatureError, so
+    the failure must surface as an empty capture drain => 400."""
+    with mock_aws():
+        _init_rating_service()
+        from serviceaid import handler as H
+
+        caller_hby = Habery(name="caller", temp=True,
+                            salt=Salter(raw=b'caller9876543210').qb64)
+        try:
+            caller = caller_hby.makeHab(name="caller", transferable=True)
+            exn, _ = exchanging.exchange(route="/rate/apply",
+                                         attributes={"risk": 5},
+                                         sender=caller.pre)
+            ims = bytearray(caller.endorse(exn, last=False))  # exn only, NO KEL
+            event = {"path": "/rate/apply", "httpMethod": "POST",
+                     "body": base64.b64encode(bytes(ims)).decode(),
+                     "isBase64Encoded": True}
+
+            resp = H.handler(event, None)
+
+            assert resp["statusCode"] == 400
+            assert json.loads(resp["body"])["error"] == "no verified exn for route"
+        finally:
+            caller_hby.close()
+
+
+@needs_moto
+def test_route_mismatch_returns_400():
+    """An exn whose embedded route differs from the POSTed path must never be
+    processed as the POSTed route (only /rate/apply is registered, so the
+    foreign exn finds no behavior and the /rate/apply drain stays empty)."""
+    with mock_aws():
+        _init_rating_service()
+        from serviceaid import handler as H
+
+        caller_hby, _, event = _caller_request("/other/route", {"risk": 5})
+        event["path"] = "/rate/apply"   # POSTed path != embedded exn route
+        try:
+            resp = H.handler(event, None)
+
+            assert resp["statusCode"] == 400
+            assert json.loads(resp["body"])["error"] == "no verified exn for route"
         finally:
             caller_hby.close()

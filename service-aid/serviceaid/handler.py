@@ -27,9 +27,13 @@ logger.setLevel(logging.INFO)
 
 
 def _body_bytes(event) -> bytes:
+    """Raises ValueError on an undecodable base64 body (mapped to 400)."""
     body = event.get("body", "") or ""
     if event.get("isBase64Encoded"):
-        return base64.b64decode(body)
+        try:
+            return base64.b64decode(body)
+        except Exception as exc:  # binascii.Error (bad padding/alphabet) etc.
+            raise ValueError("invalid base64 body") from exc
     return body.encode("utf-8") if isinstance(body, str) else bytes(body)
 
 
@@ -69,7 +73,10 @@ def handler(event, context):
     if cmd is None:
         return _json_response(404, {"error": f"no command for route {path}"})
 
-    ims = _body_bytes(event)
+    try:
+        ims = _body_bytes(event)
+    except ValueError:
+        return _json_response(400, {"error": "invalid base64 body"})
     if not ims:
         return _json_response(400, {"error": "empty body"})
 
@@ -93,14 +100,25 @@ def handler(event, context):
 
     captures = behavior.drain()          # sole read path (cross-request safety)
     if not captures:
+        logger.warning("no verified exn captured for %s — likely signature/KEL "
+                       "verification failure", path)
         return _json_response(400, {"error": "no verified exn for route"})
 
     serder, attachments = captures[-1]   # newest capture wins
 
+    # Bind the drained exn to THIS request: the Exchanger dispatches by the
+    # exn's embedded `r` field, so a mismatched/stale capture must never be
+    # processed as if it were the POSTed route.
+    if serder.ked.get("r") != path:
+        logger.warning("drained exn route %s != request path %s — rejecting "
+                       "stale/mismatched capture", serder.ked.get("r"), path)
+        return _json_response(400, {"error": "exn route does not match request path"})
+
     # Idempotency: a duplicate exn SAID short-circuits before dispatch.
+    # "duplicate" must win the merge so clients can distinguish replays.
     cached = state.ledger.seen(serder.said)
     if cached is not None:
-        return _json_response(200, {"status": "duplicate", **cached})
+        return _json_response(200, {**cached, "status": "duplicate"})
 
     attrs = serder.ked.get("a", {}) or {}
     req = Request(sender=serder.ked["i"], payload=attrs, credentials=[],
