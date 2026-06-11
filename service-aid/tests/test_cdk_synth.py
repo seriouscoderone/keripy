@@ -36,3 +36,30 @@ def test_core_stack_creates_pooled_table_and_ssm_export():
         "DeletionPolicy": "Retain",
         "UpdateReplacePolicy": "Retain",
     })
+
+
+def test_service_aid_construct_provisions_lambda_apigw_keeper(tmp_path):
+    from aws_cdk import App, Stack
+    from aws_cdk.assertions import Template
+    from serviceaid.cdk.service_aid_construct import ServiceAid
+
+    # Provide a stub Dockerfile so DockerImageCode.from_image_asset can
+    # fingerprint the directory at synth time without a real Docker build.
+    (tmp_path / "Dockerfile").write_text("FROM public.ecr.aws/lambda/python:3.12\n")
+
+    app = App()
+    stack = Stack(app, "RatingSvc")
+    ServiceAid(stack, "Rating",
+               alias="rating", core_table_name="keri-core",
+               handler_module="rating_handler",
+               witnesses=["BWit1", "BWit2"], toad=2,
+               image_directory=str(tmp_path))
+    t = Template.from_stack(stack)
+    # cr.Provider synthesizes its own framework Lambda(s), so don't count
+    # functions — assert the service function exists by name/env instead.
+    t.resource_count_is("AWS::DynamoDB::Table", 1)         # isolated keeper table
+    t.resource_count_is("AWS::SecretsManager::Secret", 1)  # keeper bran
+    t.has_resource_properties("AWS::Lambda::Function", {
+        "FunctionName": "rating-serviceaid",
+        "Environment": {"Variables": {"SERVICEAID_ALIAS": "rating"}}
+    })
