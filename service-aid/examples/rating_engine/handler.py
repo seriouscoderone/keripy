@@ -23,6 +23,10 @@ def rate(req: Request) -> Reply:
     return Reply.acdc(
         recipient=req.sender,
         attributes={"score": score, "dt": req.now()},
-        edges={"profile": {"cred_said": req.payload_said,
-                           "schema_said": RATING_SCHEMA_SAID}} if req.payload_said else None,
+        # To chain this result to an input credential the caller presented,
+        # set edges to {"<edge-name>": {"cred_said": <linked ACDC SAID, e.g.
+        # req.credentials[0]["said"]>, "schema_said": <that credential's schema
+        # SAID>}}. `s` must be the LINKED credential's schema, not this one's.
+        # Omitted here: the rating is a standalone attestation.
+        edges=None,
     )
