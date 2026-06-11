@@ -53,7 +53,7 @@ def test_service_aid_construct_provisions_lambda_apigw_keeper(tmp_path):
                alias="rating", core_table_name="keri-core",
                handler_module="rating_handler",
                witnesses=["BWit1", "BWit2"], toad=2,
-               image_directory=str(tmp_path))
+               image_directory=str(tmp_path), dockerfile="Dockerfile")
     t = Template.from_stack(stack)
     # cr.Provider synthesizes its own framework Lambda(s), so don't count
     # functions — assert the service function exists by name/env instead.

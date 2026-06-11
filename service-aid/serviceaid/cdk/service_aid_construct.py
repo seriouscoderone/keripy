@@ -41,6 +41,13 @@ class ServiceAid(Construct):
     CR Lambda is needed.  ``cr.Provider`` does synthesise its own framework
     Lambda, however — test assertions should match functions by ``FunctionName``
     rather than counting all Lambda resources.
+
+    Docker image: ``image_directory`` is the Docker BUILD CONTEXT and MUST be
+    the repo root, because the bundled Dockerfile's ``COPY src/keri`` and
+    ``COPY service-aid/...`` paths resolve relative to the context root.
+    ``dockerfile`` is the Dockerfile path relative to that context (it is NOT at
+    the context root — it lives under ``service-aid/``), defaulting to
+    ``service-aid/Dockerfile``.
     """
 
     def __init__(
@@ -54,6 +61,7 @@ class ServiceAid(Construct):
         witnesses: list[str] | None = None,
         toad: int = 0,
         image_directory: str = ".",
+        dockerfile: str = "service-aid/Dockerfile",
         memory: int = 1024,
         timeout_seconds: int = 120,
         **kw,
@@ -118,7 +126,7 @@ class ServiceAid(Construct):
             self,
             "Function",
             function_name=f"{alias}-serviceaid",
-            code=_lambda.DockerImageCode.from_image_asset(image_directory),
+            code=_lambda.DockerImageCode.from_image_asset(image_directory, file=dockerfile),
             memory_size=memory,
             timeout=Duration.seconds(timeout_seconds),
             architecture=_lambda.Architecture.ARM_64,
