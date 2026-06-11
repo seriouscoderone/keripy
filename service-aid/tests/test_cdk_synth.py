@@ -31,3 +31,8 @@ def test_core_stack_creates_pooled_table_and_ssm_export():
             "Projection": {"ProjectionType": "ALL"},
         }],
     })
+
+    t.has_resource("AWS::DynamoDB::Table", {
+        "DeletionPolicy": "Retain",
+        "UpdateReplacePolicy": "Retain",
+    })

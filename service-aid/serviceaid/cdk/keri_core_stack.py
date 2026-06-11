@@ -20,6 +20,9 @@ class KeriCoreStack(Stack):
             partition_key=ddb.Attribute(name="PK", type=ddb.AttributeType.STRING),
             sort_key=ddb.Attribute(name="SK", type=ddb.AttributeType.STRING),
             billing_mode=ddb.BillingMode.PAY_PER_REQUEST,
+            # WARNING: RETAIN + fixed table_name is intentional — this table must
+            # outlive any stack lifecycle. After `cdk destroy`, the orphaned table
+            # blocks redeploy (ResourceAlreadyExists): re-import it before redeploying.
             removal_policy=RemovalPolicy.RETAIN,
         )
         self.table.add_global_secondary_index(
@@ -27,6 +30,9 @@ class KeriCoreStack(Stack):
             partition_key=ddb.Attribute(name="gsi_pk", type=ddb.AttributeType.STRING),
             sort_key=ddb.Attribute(name="gsi_sk", type=ddb.AttributeType.STRING),
         )
+
+        # TODO(before production): enable point-in-time recovery and
+        # deletion_protection — this pooled table holds EVERY service's KEL/TEL.
 
         ssm.StringParameter(self, "CoreTableNameParam",
                             parameter_name=CORE_TABLE_SSM,
