@@ -17,7 +17,7 @@ def authorize(req: Request, policy: Policy) -> tuple[bool, str]:
     if policy.allowlist and req.sender not in policy.allowlist:
         return False, f"sender {req.sender} not in allowlist"
     if policy.required_schema:
-        present = any(c.get("schema") == policy.required_schema
+        present = any(isinstance(c, dict) and c.get("schema") == policy.required_schema
                       for c in req.credentials)
         if not present:
             return False, f"missing required credential of schema {policy.required_schema}"

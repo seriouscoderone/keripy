@@ -31,3 +31,24 @@ def test_required_credential_present():
 def test_required_credential_missing():
     ok, reason = authorize(_req(creds=[]), Policy(required_schema="ESchemaX"))
     assert not ok and "credential" in reason
+
+
+def test_malformed_credential_entries_deny_not_crash():
+    ok, reason = authorize(_req(creds=[None, "junk", {"noschema": 1}]),
+                           Policy(required_schema="ESchemaX"))
+    assert not ok and "credential" in reason
+
+
+def test_both_policies_must_pass():
+    pol = Policy(allowlist=["Eok"], required_schema="ESchemaX")
+    # passes allowlist, lacks credential -> deny
+    ok, reason = authorize(_req(sender="Eok", creds=[]), pol)
+    assert not ok and "credential" in reason
+    # has credential, fails allowlist -> deny
+    ok, reason = authorize(_req(sender="Ebad",
+                                creds=[{"schema": "ESchemaX"}]), pol)
+    assert not ok and "allowlist" in reason
+    # both satisfied -> allow
+    ok, reason = authorize(_req(sender="Eok",
+                                creds=[{"schema": "ESchemaX"}]), pol)
+    assert ok and reason == ""
