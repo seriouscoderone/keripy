@@ -63,3 +63,36 @@ def test_service_aid_construct_provisions_lambda_apigw_keeper(tmp_path):
         "FunctionName": "rating-serviceaid",
         "Environment": {"Variables": {"SERVICEAID_ALIAS": "rating"}}
     })
+
+    # The scoped core-table policy must grant DescribeTable: DynamoDBer.open ->
+    # _ensure_table calls describe_table unconditionally on the core table, and
+    # only ResourceNotFound is swallowed — AccessDenied would be re-raised on
+    # every cold start. Find the scoped statement (the one bearing the
+    # LeadingKeys condition) and confirm DescribeTable is among its actions.
+    found = False
+    for pol in t.find_resources("AWS::IAM::Policy").values():
+        for stmt in pol["Properties"]["PolicyDocument"]["Statement"]:
+            actions = stmt.get("Action")
+            if (isinstance(actions, list)
+                    and "dynamodb:DescribeTable" in actions
+                    and "Condition" in stmt
+                    and "ForAllValues:StringLike" in stmt["Condition"]):
+                found = True
+    assert found, "scoped core-table policy must include dynamodb:DescribeTable"
+
+
+def test_service_aid_construct_rejects_unsafe_alias(tmp_path):
+    import pytest
+    from aws_cdk import App, Stack
+    from serviceaid.cdk.service_aid_construct import ServiceAid
+
+    (tmp_path / "Dockerfile").write_text("FROM public.ecr.aws/lambda/python:3.12\n")
+    app = App()
+    stack = Stack(app, "BadSvc")
+    # A '*' in the alias would silently widen the IAM LeadingKeys patterns and
+    # collapse the multi-tenant boundary — must be rejected at synth time.
+    with pytest.raises(ValueError, match="LeadingKeys"):
+        ServiceAid(stack, "Bad",
+                   alias="bad*alias", core_table_name="keri-core",
+                   handler_module="bad_handler",
+                   image_directory=str(tmp_path))

@@ -9,6 +9,8 @@ the Dockerfile must ADD / COPY a file named ``rating_handler.py`` to
 """
 from __future__ import annotations
 
+import re
+
 from aws_cdk import Duration, CustomResource
 from aws_cdk import aws_lambda as _lambda
 from aws_cdk import aws_apigateway as apigw
@@ -57,6 +59,9 @@ class ServiceAid(Construct):
         **kw,
     ):
         super().__init__(scope, cid, **kw)
+        if not re.fullmatch(r"[a-z0-9-]+", alias):
+            raise ValueError(f"alias must match [a-z0-9-]+ (got {alias!r}) — "
+                             "it is interpolated into IAM LeadingKeys patterns")
         witnesses = witnesses or []
 
         # ── Tier-1 reference: shared core table (not owned by this stack) ──────
@@ -100,6 +105,10 @@ class ServiceAid(Construct):
             "SERVICEAID_TOAD": str(toad),
             "SERVICEAID_HANDLER": handler_module,
             "SERVICEAID_BRAN_SECRET": bran.secret_name,
+            # config._dynamo_kwa passes region=cfg.region explicitly to boto3,
+            # and cfg.region defaults to "us-east-1" when this env var is absent
+            # — which would override Lambda's real AWS_REGION. Set it explicitly.
+            "SERVICEAID_REGION": self.node.try_get_context("region") or "us-east-1",
             # LD_LIBRARY_PATH needed for keripy's libsodium binding inside Lambda.
             "LD_LIBRARY_PATH": "/var/task/lib",
         }
@@ -122,9 +131,25 @@ class ServiceAid(Construct):
         # Bran secret: read-only.
         bran.grant_read(fn)
         # Core (pooled) table: scoped to this service's namespace prefixes only.
+        #
+        # SECURITY-CRITICAL + UNVERIFIED: the multi-tenant boundary for the
+        # pooled core table rests on dynamodb:LeadingKeys scoping GSI queries
+        # (subdb-index) by the namespaced gsi_pk. AWS's handling of LeadingKeys
+        # for *index* queries is not validated here (moto does not enforce IAM
+        # conditions). MUST be empirically verified before production: deploy two
+        # aliases and confirm a cross-tenant GSI Query from one role is DENIED.
+        # If LeadingKeys is not populated for index queries, this condition is
+        # vacuous and the pooled-table design needs rework (per-tenant tables or
+        # payload encryption). See plan Task 12 review.
+        #
+        # NOTE: DescribeTable has no item keys, so it is vacuously allowed under
+        # the LeadingKeys condition. It is required because DynamoDBer.open ->
+        # _ensure_table calls describe_table unconditionally on the core table
+        # (baser + reger); without it every cold start hits AccessDenied.
         fn.add_to_role_policy(
             iam.PolicyStatement(
                 actions=[
+                    "dynamodb:DescribeTable",
                     "dynamodb:GetItem",
                     "dynamodb:PutItem",
                     "dynamodb:DeleteItem",
