@@ -193,6 +193,8 @@ class DynamoDBer:
     def __init__(self, *, name: str, stores: dict[str, DynamoSubDb],
                  table_name: str, client, table, namespace: str = ""):
         self.name = name
+        if "#" in namespace:
+            raise ValueError(f"namespace may not contain '#': {namespace!r}")
         self.namespace = namespace
         self.env = DynamoEnv(self)
         self._stores = stores

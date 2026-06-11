@@ -66,3 +66,31 @@ def test_legacy_namespace_still_isolated_from_namespaced():
         assert ns.getVal(nsub, b"k") is None
         legacy.close()
         ns.close()
+
+
+def test_namespace_with_hash_rejected():
+    """'#' in namespace would break key-encoding injectivity — must raise."""
+    with pytest.raises(ValueError):
+        _bare_dber(namespace="bad#ns")
+
+
+@needs_moto
+def test_clear_store_is_namespace_scoped():
+    """_clear_store on one namespace must not wipe siblings or legacy data."""
+    with mock_aws():
+        a = DynamoDBer.open(name="svc", stores=["kels."], region="us-east-1",
+                            table_name="shared-core", namespace="a:kel")
+        b = DynamoDBer.open(name="svc", stores=["kels."], region="us-east-1",
+                            table_name="shared-core", namespace="b:kel")
+        legacy = DynamoDBer.open(name="svc", stores=["kels."], region="us-east-1",
+                                 table_name="shared-core")
+        for db in (a, b, legacy):
+            sub = db.env.open_db(b"kels.")
+            db.setVal(sub, b"k", b"v")
+        a._clear_store("kels.")
+        assert a.getVal(a.env.open_db(b"kels."), b"k") is None
+        assert b.getVal(b.env.open_db(b"kels."), b"k") == b"v"
+        assert legacy.getVal(legacy.env.open_db(b"kels."), b"k") == b"v"
+        b.close()
+        legacy.close()
+        a.close()
