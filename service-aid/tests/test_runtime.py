@@ -39,6 +39,16 @@ def test_init_incepts_transferable_aid_with_encrypted_keeper(monkeypatch):
         assert state.rgy.registryByName("rating") is not None
 
 
+def test_capture_handler_drain_clears():
+    from serviceaid.runtime import _CaptureHandler
+    h = _CaptureHandler(resource="/r")
+    h.handle(serder="s1")
+    h.handle(serder="s2", attachments=["a"])
+    out = h.drain()
+    assert [s for s, _ in out] == ["s1", "s2"]
+    assert h.drain() == []
+
+
 @needs_moto
 def test_init_is_warm_idempotent(monkeypatch):
     import boto3

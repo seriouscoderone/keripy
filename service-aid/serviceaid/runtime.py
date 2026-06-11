@@ -81,6 +81,13 @@ class _CaptureHandler:
     def handle(self, serder, attachments=None, **kw):
         self.captured.append((serder, attachments or []))
 
+    def drain(self):
+        """Return all captured exns and clear the buffer (sole read path —
+        prevents a stale capture from a prior request leaking into a later
+        response on a warm Lambda)."""
+        out, self.captured = self.captured, []
+        return out
+
 
 def _dynamo_kwa(cfg: Config) -> dict:
     kwa = dict(region=cfg.region)
@@ -122,7 +129,12 @@ def init(cfg: Config | None = None) -> RuntimeState:
                          table_name=cfg.keeper_table, **kwa)
     setup_keeper(ks)
 
-    bran = load_bran(cfg.bran_secret, region=cfg.region) if cfg.bran_secret else None
+    if cfg.bran_secret:
+        bran = load_bran(cfg.bran_secret, region=cfg.region)
+    else:
+        bran = None
+        logger.warning("SERVICEAID_BRAN_SECRET not set — keeper keys will be "
+                       "stored UNENCRYPTED in %s", cfg.keeper_table)
 
     cf = Configer(name=cfg.alias, temp=True)  # Lambda: filesystem only in /tmp
     hby = Habery(name=cfg.alias, temp=False, free=True, db=db, ks=ks, cf=cf,
@@ -136,6 +148,10 @@ def init(cfg: Config | None = None) -> RuntimeState:
         # service AID the TEL witness-receipt escrow cannot complete on the
         # synchronous virtual-time Doist -- see the WARNING in
         # serviceaid/issuing.py.  Witnessed-deployment completion is deferred.
+        # Race note: like registry creation (see issuing.ensure_registry),
+        # this lazy-create path is not race-safe — two racing cold starts
+        # would mint two AIDs with last-write-wins on the alias mapping; the
+        # Task 11 inception Custom Resource contract applies here too.
         hab = hby.makeHab(name=cfg.alias, transferable=True,
                           wits=cfg.witnesses, toad=cfg.toad,
                           isith="1", icount=1, nsith="1", ncount=1)
