@@ -191,8 +191,9 @@ class DynamoDBer:
     """
 
     def __init__(self, *, name: str, stores: dict[str, DynamoSubDb],
-                 table_name: str, client, table):
+                 table_name: str, client, table, namespace: str = ""):
         self.name = name
+        self.namespace = namespace
         self.env = DynamoEnv(self)
         self._stores = stores
         self.stores = list(stores)
@@ -216,6 +217,7 @@ class DynamoDBer:
         table_name: str | None = None,
         clear: bool = False,
         session: "boto3.Session | None" = None,
+        namespace: str = "",
     ) -> "DynamoDBer":
         """
         Open a DynamoDB-backed DynamoDBer instance.
@@ -262,7 +264,7 @@ class DynamoDBer:
             )
 
         dber = cls(name=name, stores=opened, table_name=table_name,
-                   client=client, table=table)
+                   client=client, table=table, namespace=namespace)
 
         if clear:
             for store_name in all_store_names:
@@ -326,13 +328,21 @@ class DynamoDBer:
 
     # ---- Internal DynamoDB helpers ----
 
+    def _nskey(self, name: str) -> str:
+        """Prefix a store/meta name with the tenant namespace when set.
+
+        Empty namespace reproduces the legacy single-tenant key format, so
+        existing tables (e.g. the deployed witness) are unaffected.
+        """
+        return f"{self.namespace}#{name}" if self.namespace else name
+
     def _pk(self, db: DynamoSubDb, key: bytes) -> str:
-        """Form the partition key: subdb_name#hex(key)."""
-        return f"{db.name}#{_hex(key)}"
+        """Form the partition key: [namespace#]subdb_name#hex(key)."""
+        return f"{self._nskey(db.name)}#{_hex(key)}"
 
     def _gsi_pk(self, db: DynamoSubDb) -> str:
-        """GSI partition key is just the subdb name."""
-        return db.name
+        """GSI partition key is [namespace#]subdb_name."""
+        return self._nskey(db.name)
 
     def _gsi_sk(self, key: bytes) -> str:
         """GSI sort key is the hex-encoded full key."""
@@ -458,18 +468,18 @@ class DynamoDBer:
         """Store metadata for a subdb."""
         import json
         self._table.put_item(Item={
-            "PK": f"__meta__#{db.name}",
+            "PK": f"__meta__#{self._nskey(db.name)}",
             "SK": _SK_META,
             "val": json.dumps(meta).encode("utf-8"),
             _GSI_PK: "__meta__",
-            _GSI_SK: db.name,
+            _GSI_SK: self._nskey(db.name),
         })
 
     def _get_meta(self, db: DynamoSubDb) -> dict | None:
         """Read metadata for a subdb."""
         import json
         resp = self._table.get_item(
-            Key={"PK": f"__meta__#{db.name}", "SK": _SK_META},
+            Key={"PK": f"__meta__#{self._nskey(db.name)}", "SK": _SK_META},
             ConsistentRead=True,
         )
         item = resp.get("Item")
@@ -483,9 +493,9 @@ class DynamoDBer:
         return json.loads(raw)
 
     def _clear_store(self, store_name: str):
-        """Delete all items belonging to a store."""
+        """Delete all items belonging to a store (within this namespace)."""
         # Query GSI for all items in this store
-        kce = Key(_GSI_PK).eq(store_name)
+        kce = Key(_GSI_PK).eq(self._nskey(store_name))
         kwargs = {
             "IndexName": _GSI_NAME,
             "KeyConditionExpression": kce,
@@ -501,7 +511,7 @@ class DynamoDBer:
             kwargs["ExclusiveStartKey"] = lek
 
         # Also delete the meta entry (deduplicate in case GSI already included it)
-        meta_key = {"PK": f"__meta__#{store_name}", "SK": _SK_META}
+        meta_key = {"PK": f"__meta__#{self._nskey(store_name)}", "SK": _SK_META}
         seen = {(k["PK"], k["SK"]) for k in keys_to_delete}
         if (meta_key["PK"], meta_key["SK"]) not in seen:
             keys_to_delete.append(meta_key)
