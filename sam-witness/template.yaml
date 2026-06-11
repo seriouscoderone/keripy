@@ -21,10 +21,16 @@ Parameters:
     Type: String
     Default: witness
     Description: Base name for witness databases and resources
-  WitnessSalt:
+  WitnessSaltSecret:
     Type: String
     Default: ""
-    Description: qb64-encoded salt for key derivation (leave empty for auto-generated)
+    Description: >
+      Name or ARN of an operator-created Secrets Manager secret holding the
+      qb64 salt for key derivation. The salt VALUE is never stored in this
+      template/stack — only the secret reference. Hold the authoritative copy
+      offline; create the secret with `aws secretsmanager create-secret`.
+      Leave empty ONLY for throwaway/dev stacks (the handler then mints a
+      random salt on first cold start — a different AID each fresh deploy).
   WitnessAlias:
     Type: String
     Default: witness
@@ -37,6 +43,10 @@ Parameters:
     Type: String
     Description: Route53 hosted zone ID for DomainName (must be created out-of-band)
     AllowedPattern: '^Z[A-Z0-9]+$'
+
+Conditions:
+  # Only grant secretsmanager:GetSecretValue when a salt secret is configured.
+  HasSaltSecret: !Not [!Equals [!Ref WitnessSaltSecret, ""]]
 
 Resources:
   # DynamoDB table for Baser (KEL events, escrows, state, reger, mailboxer)
@@ -113,7 +123,7 @@ Resources:
           WITNESS_ALIAS: !Ref WitnessAlias
           WITNESS_BASER_TABLE: !Ref WitnessBaserTable
           WITNESS_KEEPER_TABLE: !Ref WitnessKeeperTable
-          WITNESS_SALT: !Ref WitnessSalt
+          WITNESS_SALT_SECRET: !Ref WitnessSaltSecret
           WITNESS_REGION: !Ref AWS::Region
           WITNESS_ENDPOINT_URL: ""
           WITNESS_URL: !Sub "https://${DomainName}"
@@ -123,6 +133,16 @@ Resources:
             TableName: !Ref WitnessBaserTable
         - DynamoDBCrudPolicy:
             TableName: !Ref WitnessKeeperTable
+        # Read the operator-held salt from Secrets Manager (only when set).
+        # The "*" suffix covers the random 6-char suffix Secrets Manager
+        # appends to a name-based ARN; a full ARN matches as its own prefix.
+        - !If
+          - HasSaltSecret
+          - Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Sub "arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${WitnessSaltSecret}*"
+          - !Ref AWS::NoValue
       Events:
         PostRoot:
           Type: Api

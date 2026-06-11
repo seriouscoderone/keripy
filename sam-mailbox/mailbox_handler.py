@@ -113,6 +113,25 @@ def _publish_self_endpoints():
         logger.warning("failed to register self-endpoints: %s", exc)
 
 
+def _load_salt(secret_id, region, direct=None):
+    """Resolve the qb64 salt for the mailbox AID.
+
+    Production: operator-held salt fetched from Secrets Manager (secret_id is
+    the secret name/ARN). The salt value is never stored in the template/stack.
+
+    `direct` is a LOCAL/DEV-ONLY override (raw qb64 salt via the MAILBOX_SALT
+    env) for `sam local` and unit tests — it is NEVER set by the deployed
+    template. Returns None when neither is configured (the caller treats that
+    as a hard error — the mailbox refuses to mint a non-recoverable AID)."""
+    if direct:
+        return direct
+    if not secret_id:
+        return None
+    import boto3
+    sm = boto3.client("secretsmanager", region_name=region)
+    return sm.get_secret_value(SecretId=secret_id)["SecretString"]
+
+
 def init():
     """Cold-start: set up Habery with DynamoDB, create/load mailbox Hab,
     do one-time witness round-trip on fresh inception, publish self-OOBI rpy,
@@ -135,8 +154,13 @@ def init():
 
     name = os.environ.get("MAILBOX_NAME", "mailbox")
     alias = os.environ.get("MAILBOX_ALIAS", "mailbox")
-    salt = os.environ.get("MAILBOX_SALT")
     region = os.environ.get("MAILBOX_REGION", "us-east-1")
+    # Salt is operator-held offline and supplied via Secrets Manager — never as
+    # a plaintext template/stack value. MAILBOX_SALT_SECRET is the secret's
+    # name/ARN; the salt value is fetched here at cold start. MAILBOX_SALT is a
+    # local/dev-only direct override (never set by the deployed template).
+    salt = _load_salt(os.environ.get("MAILBOX_SALT_SECRET"), region,
+                      direct=os.environ.get("MAILBOX_SALT"))
     endpoint_url = os.environ.get("MAILBOX_ENDPOINT_URL")
     baser_table = os.environ.get("MAILBOX_BASER_TABLE") or f"{name}-db"
     keeper_table = os.environ.get("MAILBOX_KEEPER_TABLE") or f"{name}-ks"
@@ -149,8 +173,8 @@ def init():
 
     if not salt:
         raise RuntimeError(
-            "MAILBOX_SALT env var is required — refusing to mint a "
-            "non-recoverable AID with a fresh salt"
+            "MAILBOX_SALT_SECRET must reference a Secrets Manager secret holding "
+            "the qb64 salt — refusing to mint a non-recoverable AID with a fresh salt"
         )
 
     kwa = dict(region=region)

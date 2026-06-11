@@ -1,7 +1,7 @@
 # Shared SAM CLI defaults for the mailbox stack — NON-PERSONAL ONLY.
 #
 # Operator-specific values (AWS profile, stack-name suffix, DomainName,
-# HostedZoneId, MailboxSalt, WitnessAid, WitnessUrl) are NOT in this file.
+# HostedZoneId, MailboxSaltSecret, WitnessAid, WitnessUrl) are NOT in this file.
 # Pass them at deploy time:
 #
 #   AWS_PROFILE=<your-profile> sam deploy \
@@ -10,7 +10,7 @@
 #         MailboxName=mailbox-<label> \
 #         DomainName=mailbox.<your-domain> \
 #         HostedZoneId=Z... \
-#         MailboxSalt=0A...
+#         MailboxSaltSecret=mailbox/salt  (a Secrets Manager secret name)
 #
 # For repeated personal use, copy this to `samconfig.local.toml` (gitignored)
 # and add `profile = "..."`, `stack_name = "..."`, etc. Then deploy with

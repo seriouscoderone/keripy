@@ -417,7 +417,22 @@ def test_init_requires_mailbox_salt(monkeypatch):
     # monkeypatch for 'mailbox_handler.init' and then setting _initialized=False.
     monkeypatch.undo()  # undo ALL monkeypatches so far, including autouse mock
     monkeypatch.delenv("MAILBOX_SALT", raising=False)
+    monkeypatch.delenv("MAILBOX_SALT_SECRET", raising=False)
     monkeypatch.setattr(mailbox_handler, "_initialized", False)
     with pytest.raises(RuntimeError) as exc_info:
         mailbox_handler.init()
     assert "MAILBOX_SALT" in str(exc_info.value)
+
+
+def test_load_salt_direct_override_is_local_dev_path():
+    """A direct qb64 salt (local/dev MAILBOX_SALT) is returned as-is, no AWS call."""
+    import mailbox_handler
+    assert mailbox_handler._load_salt(None, "us-east-1", direct="0AB123") == "0AB123"
+
+
+def test_load_salt_returns_none_when_nothing_configured():
+    """No secret + no direct override ⇒ None (caller raises; never mints)."""
+    import mailbox_handler
+    assert mailbox_handler._load_salt(None, "us-east-1") is None
+    # The Secrets Manager fetch branch (secret_id set) uses the same boto3
+    # pattern proven by service-aid's test_load_bran_from_secrets_manager (moto).

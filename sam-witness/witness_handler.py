@@ -28,6 +28,27 @@ def _clear_keeper(ks):
             pass
 
 
+def _load_salt(secret_id, region, direct=None):
+    """Resolve the qb64 salt for key derivation.
+
+    Production: operator-held salt fetched from Secrets Manager (secret_id is
+    the secret name/ARN). The salt value is never stored in the template/stack.
+
+    `direct` is a LOCAL/DEV-ONLY override (a raw qb64 salt via the WITNESS_SALT
+    env) for `sam local` and unit tests — it is NEVER set by the deployed
+    template. Returns None when neither is configured (caller mints a fresh
+    salt → non-reproducible AID; dev/throwaway only)."""
+    if direct:
+        return direct
+    if not secret_id:
+        logger.warning("WITNESS_SALT_SECRET not set — minting a random salt; "
+                       "this stack will have a NON-reproducible AID")
+        return None
+    import boto3
+    sm = boto3.client("secretsmanager", region_name=region)
+    return sm.get_secret_value(SecretId=secret_id)["SecretString"]
+
+
 def init():
     """Cold-start: set up Habery with DynamoDB backends and create/load witness Hab."""
     global _hby, _hab, _parser
@@ -42,8 +63,13 @@ def init():
 
     name = os.environ.get("WITNESS_NAME", "witness")
     alias = os.environ.get("WITNESS_ALIAS", "witness")
-    salt = os.environ.get("WITNESS_SALT")
     region = os.environ.get("WITNESS_REGION", "us-east-1")
+    # Salt is operator-held offline and supplied via Secrets Manager — never as
+    # a plaintext template/stack value. WITNESS_SALT_SECRET is the secret's
+    # name/ARN; the salt value is fetched here at cold start. WITNESS_SALT is a
+    # local/dev-only direct override (never set by the deployed template).
+    salt = _load_salt(os.environ.get("WITNESS_SALT_SECRET"), region,
+                      direct=os.environ.get("WITNESS_SALT"))
     endpoint_url = os.environ.get("WITNESS_ENDPOINT_URL")
     baser_table = os.environ.get("WITNESS_BASER_TABLE")
     keeper_table = os.environ.get("WITNESS_KEEPER_TABLE")

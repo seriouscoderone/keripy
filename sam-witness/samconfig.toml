@@ -1,7 +1,7 @@
 # Shared SAM CLI defaults for the witness stack — NON-PERSONAL ONLY.
 #
 # Operator-specific values (AWS profile, stack-name suffix for pool members,
-# DomainName, HostedZoneId, WitnessSalt) are NOT in this file. Pass them at
+# DomainName, HostedZoneId, WitnessSaltSecret) are NOT in this file. Pass them at
 # deploy time:
 #
 #   AWS_PROFILE=<your-profile> sam deploy \
