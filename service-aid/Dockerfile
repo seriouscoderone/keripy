@@ -13,11 +13,11 @@ COPY src/keri /deps/keri
 COPY service-aid/serviceaid /deps/serviceaid
 COPY service-aid/bootstrap.py /deps/bootstrap.py
 # Developer handler module, baked into the image at build time.
-# PLACEHOLDER until Task 13 lands examples/rating_engine/handler.py — `docker build`
-# fails on this COPY until then (intentional; the example is part of this branch).
-# Convention: the file's basename (minus .py) MUST equal the SERVICEAID_HANDLER env
-# var the ServiceAid construct sets (runtime.init imports that module by name).
-# For your own service: replace this COPY with your handler file.
+# Convention: the DESTINATION basename here (rating_handler — i.e. the module
+# importable as `rating_handler`) MUST equal the SERVICEAID_HANDLER env var the
+# ServiceAid construct sets; runtime.init() does importlib.import_module(that).
+# For your own service: replace this COPY's SOURCE with your handler file and
+# set handler_module to match this destination basename.
 COPY service-aid/examples/rating_engine/handler.py /deps/rating_handler.py
 
 RUN mkdir -p /deps/lib && find /usr/lib -name 'libsodium.so*' -exec cp -P {} /deps/lib/ \;
