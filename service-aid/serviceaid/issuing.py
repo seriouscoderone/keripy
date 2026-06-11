@@ -3,8 +3,16 @@
 Adapted from the proven synchronous path in the Locksmith wallet
 (credentialing.py / ipexing.py), which runs against this keripy fork.
 v1 uses a no-backer registry so TEL issuance needs no receipts and completes
-in-process. The AID's KEL anchor is witnessed by the federation; collecting
-those receipts is handled by the caller (runtime), not here.
+in-process.
+
+WARNING -- witnessed-AID limitation: the anchor ixn is created INSIDE
+`issue_grant` (and `ensure_registry`), so its witness receipts cannot be
+pre-collected by the caller. For a WITNESSED service AID,
+`Registrar.processWitnessEscrow` (keri/vdr/credentialing.py:740-760) holds
+the tpwe escrow until ALL witness receipts arrive, so `_complete` on a
+virtual-time Doist will exhaust its rounds and raise. The runtime (Task 7)
+must either run completion on a real-time Doist with a deadline or keep the
+issuance path effectively unwitnessed at the TEL layer.
 """
 from __future__ import annotations
 
@@ -20,7 +28,16 @@ from keri.vc import protocoling
 
 
 def ensure_registry(hby, hab, rgy, *, name: str):
-    """Return the credential registry for `name`, creating it (no backers) if absent."""
+    """Return the credential registry for `name`, creating it (no backers) if absent.
+
+    Concurrency contract: creation is NOT race-safe. `makeRegistry` is seeded
+    with a random nonce, so two racing cold starts that both miss the read
+    branch would mint two different registries for the same name
+    (last-write-wins in `reger.regs`). The deployment contract is that the
+    inception Custom Resource (Task 11) creates the registry exactly once at
+    deploy time, and the runtime path only ever hits the read branch here.
+    Lazy creation below is a fallback for tests/bootstrap, not the design.
+    """
     existing = rgy.registryByName(name)
     if existing is not None:
         return existing
@@ -43,7 +60,18 @@ def issue_grant(hby, hab, rgy, *, schema_said: str, recipient: str,
                 attributes: dict, edges: dict | None = None,
                 rules: dict | None = None, registry_name: str = "svc",
                 message: str = "", timestamp: str | None = None) -> bytearray:
-    """Issue an ACDC of `schema_said` to `recipient` and return a CESR IPEX grant."""
+    """Issue an ACDC of `schema_said` to `recipient` and return a CESR IPEX grant.
+
+    Partial-failure semantics: if this dies after `hab.interact` but before
+    completion, the KEL keeps a harmless orphan anchor and the TEL iss event
+    sits in escrow. The NEXT `issue_grant` call's `_complete` pumps ALL
+    escrows, so the abandoned credential silently completes -- "issued but
+    never delivered". A retry mints a NEW credential SAID (a fresh `dt` is
+    injected by the credential factory) UNLESS the caller passes `attributes`
+    containing an explicit `dt`, in which case the same SAID is reproduced.
+    Callers (handler/idempotency layers) must record the
+    request-SAID -> grant mapping BEFORE returning the reply.
+    """
     timestamp = timestamp or helping.nowIso8601()
     registry = ensure_registry(hby, hab, rgy, name=registry_name)
 
@@ -123,8 +151,9 @@ def _complete(rgy, registrar, pre, sn, *, verifier=None, credentialer=None,
 
     doers = [registrar] if credentialer is None else [registrar, credentialer]
     doist = doing.Doist(real=False, tock=1.0)
-    deeds = doist.enter(doers=doers)
+    deeds = None
     try:
+        deeds = doist.enter(doers=doers)
         for _ in range(rounds):
             if _done():
                 return
@@ -135,4 +164,5 @@ def _complete(rgy, registrar, pre, sn, *, verifier=None, credentialer=None,
         if not _done():
             raise RuntimeError(f"TEL event (pre={pre}, sn={sn}) did not complete")
     finally:
-        doist.exit(deeds=deeds)
+        if deeds is not None:
+            doist.exit(deeds=deeds)
