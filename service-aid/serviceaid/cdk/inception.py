@@ -18,8 +18,12 @@ logger.setLevel(logging.INFO)
 
 
 def on_event(event, context):
-    request_type = event.get("RequestType", "Create")
+    request_type = event["RequestType"]
     if request_type in ("Create", "Update"):
+        # Note: if SERVICEAID_ALIAS changes, init() returns a new pre → CFN
+        # treats this as a resource replacement and sends Delete for the old
+        # pre, which no-ops here. The old AID/keys are orphaned (intentional;
+        # recovery requires a manual key ceremony).
         runtime.reset()
         state = runtime.init()      # reads config from env; incepts if absent
         pre = state.hab.pre
