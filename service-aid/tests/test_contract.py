@@ -28,6 +28,20 @@ def test_register_schema_returns_said_and_queues():
     assert said.startswith("E")          # SAID is a Blake3 digest
     assert len(svc.schemas) == 1
     assert svc.schemas[0]["$id"] == said  # saidified in place
+    assert sad["$id"] == ""               # caller's dict untouched
+
+
+def test_duplicate_route_rejected():
+    svc = Service()
+
+    @svc.command(route="/r", issues="E1")
+    def a(req):
+        return Reply.none()
+
+    with pytest.raises(ValueError, match="duplicate route"):
+        @svc.command(route="/r", issues="E2")
+        def b(req):
+            return Reply.none()
 
 
 def test_reply_constructors():
