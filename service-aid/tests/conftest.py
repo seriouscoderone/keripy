@@ -8,8 +8,8 @@ os.environ.setdefault("HOME", tempfile.mkdtemp(prefix="serviceaid-test-"))
 
 from keri.app.habbing import Habery
 from keri.core.signing import Salter
-from keri.core import scheming
-from keri.kering import Kinds
+from keri.core import scheming, parsing
+from keri.kering import Kinds, Vrsn_1_0
 
 from _schema import RATING_SCHEMA_SAD
 
@@ -30,10 +30,19 @@ def rating_schema(issuer_hby):
 
 
 @pytest.fixture
-def recipient_pre():
-    """A deterministic recipient AID prefix for tests."""
+def recipient_pre(issuer_hby):
+    """A deterministic recipient AID prefix for tests.
+
+    The recipient's inception event is fed into the issuer's Kevery (as OOBI
+    resolution would in production) because Credentialer.create requires the
+    issuee's KEL to be known before issuing.
+    """
     rcp_hby = Habery(name="rcp", temp=True, salt=Salter(raw=b'fedcba9876543210').qb64)
     hab = rcp_hby.makeHab(name="rcp", transferable=True)
     pre = hab.pre
+    kel = hab.replay()
     rcp_hby.close()
+    parsing.Parser(kvy=issuer_hby.kvy, version=Vrsn_1_0).parse(ims=bytearray(kel))
+    issuer_hby.kvy.processEscrows()
+    assert pre in issuer_hby.kevers
     return pre
