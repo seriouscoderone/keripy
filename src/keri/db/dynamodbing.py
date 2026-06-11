@@ -191,8 +191,18 @@ class DynamoDBer:
     """
 
     def __init__(self, *, name: str, stores: dict[str, DynamoSubDb],
-                 table_name: str, client, table, namespace: str = ""):
+                 table_name: str, client, table, namespace: str | None = None):
         self.name = name
+        # Every key is namespaced — there is no bare/legacy format. When no
+        # explicit namespace is given, the instance name IS the namespace, so a
+        # single-tenant store-set (witness, mailbox, lambding) is self-isolated
+        # with zero ceremony. Pooling DISTINCT store-sets into one physical
+        # table (e.g. a Service AID's baser vs reger, which share a `stts.`
+        # store) REQUIRES distinct explicit namespaces — the same name/namespace
+        # would collide. Old single-tenant tables written before namespacing use
+        # the bare `{subdb}#{key}` format and are NOT readable here: redeploy
+        # against fresh tables (destroy-and-replace, not in-place migration).
+        namespace = namespace if namespace else name
         if "#" in namespace:
             raise ValueError(f"namespace may not contain '#': {namespace!r}")
         self.namespace = namespace
@@ -219,7 +229,7 @@ class DynamoDBer:
         table_name: str | None = None,
         clear: bool = False,
         session: "boto3.Session | None" = None,
-        namespace: str = "",
+        namespace: str | None = None,
     ) -> "DynamoDBer":
         """
         Open a DynamoDB-backed DynamoDBer instance.
@@ -331,19 +341,19 @@ class DynamoDBer:
     # ---- Internal DynamoDB helpers ----
 
     def _nskey(self, name: str) -> str:
-        """Prefix a store/meta name with the tenant namespace when set.
+        """Prefix a store/meta name with the tenant namespace.
 
-        Empty namespace reproduces the legacy single-tenant key format, so
-        existing tables (e.g. the deployed witness) are unaffected.
+        The namespace is always set (explicit, else the instance name), so every
+        key is namespaced — there is no bare format.
         """
-        return f"{self.namespace}#{name}" if self.namespace else name
+        return f"{self.namespace}#{name}"
 
     def _pk(self, db: DynamoSubDb, key: bytes) -> str:
-        """Form the partition key: [namespace#]subdb_name#hex(key)."""
+        """Form the partition key: namespace#subdb_name#hex(key)."""
         return f"{self._nskey(db.name)}#{_hex(key)}"
 
     def _gsi_pk(self, db: DynamoSubDb) -> str:
-        """GSI partition key is [namespace#]subdb_name."""
+        """GSI partition key is namespace#subdb_name."""
         return self._nskey(db.name)
 
     def _gsi_sk(self, key: bytes) -> str:

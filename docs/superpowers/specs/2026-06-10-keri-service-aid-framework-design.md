@@ -125,7 +125,9 @@ def rate(req: Request) -> Reply:
 _pk:     f"{self.name}#{db.name}#{_hex(key)}"
 _gsi_pk: f"{self.name}#{db.name}"
 ```
-Also update the `_clear_store`/meta paths (`dynamodbing.py:464-465,488`). Add a storage-format version flag; existing single-tenant tables need migration or stay on the old format. This is the **prerequisite for the shared `KeriCoreStack`** pooling.
+Also update the `_clear_store`/meta paths (`dynamodbing.py:464-465,488`). This is the **prerequisite for the shared `KeriCoreStack`** pooling.
+
+**[ADDENDUM 2026-06-11 — shipped as GREENFIELD, not backward-compatible.]** The change was first merged (commit `b17c3f63`) as an *optional* `namespace` param defaulting to the bare legacy format (to protect the deployed witness). Per operator decision (destroy-and-replace all deployed witnesses/watchers/mailbox in `AWS_PROFILE=personal`), it was then converted to a **clean-slate single scheme**: **every** key is `{namespace}#{subdb}#{hex}` — there is no bare format. `namespace` defaults to the instance **name** when not given explicitly (so single-tenant callers — witness/mailbox/`lambding.init` — are self-isolated with zero code change), and the Service AID passes distinct explicit namespaces (`{alias}:kel`, `{alias}:tel`) to pool baser+reger safely in one table. **No migration:** old single-tenant tables (bare keys) are unreadable under the new scheme — redeploy against fresh tables. Same `WITNESS_SALT`/salt on redeploy ⇒ same AID (deterministic under salty derivation), fresh empty KEL. The `#`-in-namespace guard now also covers the name-derived namespace.
 
 ## 9. Authorization
 
