@@ -609,6 +609,17 @@ def setup_reger(dber):
     # Completed Credentials
     dber.ccrd = SerderSuber(db=dber, subkey='ccrd.', klas=SerderACDC)
 
+    # -- Bind read-only Reger business methods that operate on the
+    #    sub-database attributes attached above (mirrors the setup_baser
+    #    binding loop).  Without these, Registrar / Credentialer code using
+    #    the ``rgy.reger.method(...)`` pattern (e.g. ``clonePreIter`` in
+    #    ``Registrar.processDissemination`` or ``cloneCred`` during IPEX
+    #    grant framing) would get AttributeError on a DynamoDBer.
+    from ..vdr.eventing import Reger
+    for _meth in ("cloneCreds", "logCred", "cloneCred", "clonePreIter",
+                  "cloneTvtAt", "cloneTvt", "sources"):
+        setattr(dber, _meth, types.MethodType(getattr(Reger, _meth), dber))
+
     return dber
 
 
