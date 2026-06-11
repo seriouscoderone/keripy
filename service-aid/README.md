@@ -44,7 +44,9 @@ SERVICEAID_ENDPOINT_URL=http://localhost:8000 \
 
 Single transferable AID (witnessed at the KEL layer; **witnessed TEL issuance
 completion is deferred** — see Operational must-knows); self-contained-CESR
-caller verification; allowlist + required-credential authz; synchronous
+caller verification; **allowlist authz** (required-credential authz mechanism
+is present but its caller-credential extraction is deferred — see Operational
+must-knows); synchronous
 IPEX-grant ACDC reply; idempotency. **Out (v2+):** watcher/cached key-state,
 async/long-running
 compute, cross-runtime 1-of-N multisig, KMS-as-signer, non-Python compute.
@@ -58,6 +60,9 @@ High-rate KEL/TEL append serialization is v2 (see spec §14).
   not enforce IAM conditions) and **must be confirmed before production** by
   deploying two services and attempting a cross-tenant GSI query (it must be
   denied). See `serviceaid/cdk/service_aid_construct.py`.
+- **Required-credential authz is deferred:** `Policy.required_schema` exists but
+  the handler does not yet extract caller-presented ACDCs (`credentials=[]`), so
+  setting it denies all requests. Use the allowlist for v1 sender gating.
 - **Run without a bran = plaintext keeper keys.** The runtime logs a warning;
   set `SERVICEAID_BRAN_SECRET` to a Secrets Manager secret for production.
 - **`cdk destroy` orphans the pooled table.** KeriCoreStack's table and each

@@ -134,6 +134,8 @@ Two policies, composable, evaluated after KERI verification:
 - **Required credential:** caller must present a valid ACDC of a configured schema SAID (verified via Tevery).
 KERI verification confirms *authenticity* (the message is really from that AID); authorization confirms *permission*.
 
+[ADDENDUM 2026-06-10, post-implementation] Required-credential authz is implemented as a Policy mechanism but its caller-ACDC extraction (Tevery) is NOT wired in the v1 handler (credentials=[]); allowlist authz is fully functional. Required-credential authz is deferred to a follow-up.
+
 ## 10. Error handling & idempotency
 
 | Failure | Behavior |
@@ -161,6 +163,8 @@ Idempotency + effect application: write message-SAID + a Decision summary atomic
 ## 13. v1 scope
 
 **IN:** single transferable+witnessed Service AID; DynamoDB-backed via `lambding`; self-contained-CESR caller verification; allowlist + required-credential authz; in-process Python handler contract (`@service.command` + `Reply`); synchronous IPEX-grant ACDC reply; idempotency; CDK `ServiceAid` construct + shared `KeriCoreStack` + inception Custom Resource; isolated aeid-encrypted keeper w/ Secrets Manager bran; one reference example (rating engine).
+
+[ADDENDUM 2026-06-10, post-implementation] Required-credential authz is implemented as a Policy mechanism but its caller-ACDC extraction (Tevery) is NOT wired in the v1 handler (credentials=[]); allowlist authz is fully functional. Required-credential authz is deferred to a follow-up.
 
 **OUT (v2+):** watcher / cached caller key-state; async / long-running compute & mailbox-delivered replies; workflow / aggregate / scheduling sugar; cross-runtime 1-of-N multisig identity; KMS-as-signer (key never in memory); non-Python compute targets.
 

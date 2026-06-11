@@ -48,6 +48,13 @@ class ServiceAid(Construct):
     ``dockerfile`` is the Dockerfile path relative to that context (it is NOT at
     the context root — it lives under ``service-aid/``), defaulting to
     ``service-aid/Dockerfile``.
+
+    Authorization: ``allowlist`` is the set of sender AIDs permitted to invoke
+    this service (comma-joined into ``SERVICEAID_ALLOWLIST``; empty ⇒ any
+    verified sender). ``required_schema`` is DEFERRED in v1 — the handler does
+    not yet extract caller-presented ACDCs, so a non-empty value would deny all
+    requests; leave it unset (see Part B / handler.py). Use ``allowlist`` for v1
+    sender gating.
     """
 
     def __init__(
@@ -60,6 +67,8 @@ class ServiceAid(Construct):
         handler_module: str,
         witnesses: list[str] | None = None,
         toad: int = 0,
+        allowlist: list[str] | None = None,
+        required_schema: str = "",
         image_directory: str = ".",
         dockerfile: str = "service-aid/Dockerfile",
         memory: int = 1024,
@@ -111,6 +120,8 @@ class ServiceAid(Construct):
             "SERVICEAID_KEEPER_TABLE": keeper_table.table_name,
             "SERVICEAID_WITNESSES": ",".join(witnesses),
             "SERVICEAID_TOAD": str(toad),
+            "SERVICEAID_ALLOWLIST": ",".join(allowlist or []),
+            "SERVICEAID_REQUIRED_SCHEMA": required_schema,
             "SERVICEAID_HANDLER": handler_module,
             "SERVICEAID_BRAN_SECRET": bran.secret_name,
             # config._dynamo_kwa passes region=cfg.region explicitly to boto3,

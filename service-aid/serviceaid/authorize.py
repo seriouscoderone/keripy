@@ -9,7 +9,7 @@ from .contract import Request
 @dataclass
 class Policy:
     allowlist: list[str] = field(default_factory=list)  # empty ⇒ any sender
-    required_schema: str = ""                            # empty ⇒ none required
+    required_schema: str = ""                            # empty ⇒ none required. v1 NOTE: leave empty — credential extraction is not wired in the handler yet (see handler.py), so a non-empty value denies all requests.
 
 
 def authorize(req: Request, policy: Policy) -> tuple[bool, str]:

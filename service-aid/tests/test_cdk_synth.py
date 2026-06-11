@@ -53,6 +53,7 @@ def test_service_aid_construct_provisions_lambda_apigw_keeper(tmp_path):
                alias="rating", core_table_name="keri-core",
                handler_module="rating_handler",
                witnesses=["BWit1", "BWit2"], toad=2,
+               allowlist=["Ealice"],
                image_directory=str(tmp_path), dockerfile="Dockerfile")
     t = Template.from_stack(stack)
     # cr.Provider synthesizes its own framework Lambda(s), so don't count
@@ -62,6 +63,13 @@ def test_service_aid_construct_provisions_lambda_apigw_keeper(tmp_path):
     t.has_resource_properties("AWS::Lambda::Function", {
         "FunctionName": "rating-serviceaid",
         "Environment": {"Variables": {"SERVICEAID_ALIAS": "rating"}}
+    })
+    # Authz config must be reachable through the construct: allowlist is
+    # comma-joined into SERVICEAID_ALLOWLIST so the working allowlist policy
+    # can actually be enabled by a deployer.
+    t.has_resource_properties("AWS::Lambda::Function", {
+        "FunctionName": "rating-serviceaid",
+        "Environment": {"Variables": {"SERVICEAID_ALLOWLIST": "Ealice"}}
     })
 
     # The scoped core-table policy must grant DescribeTable: DynamoDBer.open ->

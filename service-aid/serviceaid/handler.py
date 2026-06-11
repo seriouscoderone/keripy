@@ -121,7 +121,10 @@ def handler(event, context):
         return _json_response(200, {**cached, "status": "duplicate"})
 
     attrs = serder.ked.get("a", {}) or {}
-    req = Request(sender=serder.ked["i"], payload=attrs, credentials=[],
+    req = Request(sender=serder.ked["i"], payload=attrs,
+                  credentials=[],   # v1: required-credential authz is DEFERRED —
+                  # caller-attached ACDC extraction via Tevery is not yet wired, so
+                  # Policy.required_schema must stay unset in v1 (it would deny all).
                   message_said=serder.said,
                   payload_said=attrs.get("d", "") if isinstance(attrs, dict) else "",
                   route=path)
