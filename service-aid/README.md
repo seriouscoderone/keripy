@@ -10,6 +10,7 @@ Lambda + DynamoDB. Generalizes `sam-witness`.
 ```python
 from serviceaid import service, Request, Reply
 
+# issues = service.register_schema(your_schema_sad)  # computes the real schema SAID
 @service.command(route="/rate/apply", issues="ESchemaRatingResult...")
 def rate(req: Request) -> Reply:
     score = run_my_model(req.payload["risk_profile"])
@@ -41,9 +42,11 @@ SERVICEAID_ENDPOINT_URL=http://localhost:8000 \
 
 ## v1 scope & limits
 
-Single transferable+witnessed AID; self-contained-CESR caller verification;
-allowlist + required-credential authz; synchronous IPEX-grant ACDC reply;
-idempotency. **Out (v2+):** watcher/cached key-state, async/long-running
+Single transferable AID (witnessed at the KEL layer; **witnessed TEL issuance
+completion is deferred** — see Operational must-knows); self-contained-CESR
+caller verification; allowlist + required-credential authz; synchronous
+IPEX-grant ACDC reply; idempotency. **Out (v2+):** watcher/cached key-state,
+async/long-running
 compute, cross-runtime 1-of-N multisig, KMS-as-signer, non-Python compute.
 High-rate KEL/TEL append serialization is v2 (see spec §14).
 
@@ -57,6 +60,15 @@ High-rate KEL/TEL append serialization is v2 (see spec §14).
   denied). See `serviceaid/cdk/service_aid_construct.py`.
 - **Run without a bran = plaintext keeper keys.** The runtime logs a warning;
   set `SERVICEAID_BRAN_SECRET` to a Secrets Manager secret for production.
+- **`cdk destroy` orphans the pooled table.** KeriCoreStack's table and each
+  service's keeper table use RemovalPolicy.RETAIN (intentional — losing them
+  loses identities). After a destroy, the orphaned table blocks redeploy with
+  ResourceAlreadyExists; re-import it before redeploying. The bran secret
+  similarly enters a soft-delete recovery window.
+- **SnapStart safety:** the bran is fetched inside `runtime.init()` (handler
+  invocation), never at module import — so a snapshot never captures it. Do NOT
+  move `init()` to module level; SnapStart would snapshot stale/absent key
+  material.
 - **Witnessed issuance:** v1 completes credential issuance synchronously for an
   AID whose anchor needs no witness receipts; a fully witnessed AID's issuance
   completion is deferred (see `serviceaid/issuing.py`).
