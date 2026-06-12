@@ -1,0 +1,38 @@
+# -*- encoding: utf-8 -*-
+"""Tests for the secret-backed keeper (SecretStore + SecretKeeper)."""
+import pytest
+
+try:
+    from moto import mock_aws
+    HAS_MOTO = True
+except ImportError:
+    HAS_MOTO = False
+
+needs_moto = pytest.mark.skipif(not HAS_MOTO, reason="requires moto")
+
+from keri.db.secretkeeper import SecretStore
+
+
+@needs_moto
+def test_secretstore_get_absent_returns_none():
+    with mock_aws():
+        store = SecretStore(region="us-east-1")
+        assert store.get("keri/svc/keeper") is None
+
+
+@needs_moto
+def test_secretstore_put_then_get_roundtrip():
+    with mock_aws():
+        store = SecretStore(region="us-east-1")
+        store.put("keri/svc/keeper", '{"v":1}')
+        assert store.get("keri/svc/keeper") == '{"v":1}'
+
+
+@needs_moto
+def test_secretstore_get_or_create_is_idempotent():
+    with mock_aws():
+        store = SecretStore(region="us-east-1")
+        created1, val1 = store.get_or_create("keri/svc/keeper", lambda: '{"v":1,"n":1}')
+        created2, val2 = store.get_or_create("keri/svc/keeper", lambda: '{"v":1,"n":2}')
+        assert created1 is True and val1 == '{"v":1,"n":1}'
+        assert created2 is False and val2 == '{"v":1,"n":1}'   # existing wins
