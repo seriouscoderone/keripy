@@ -27,17 +27,17 @@ _initialized = False
 
 
 def _clear_keeper(ks):
-    """Remove all data from keeper stores so Habery init can start fresh.
+    """Wipe all keeper key material so Habery init can re-incept from scratch.
 
-    Needed when a previous init attempt partially succeeded (wrote key
-    material to the keeper) but failed before the Baser's signatory record
-    was written, leaving the two databases out of sync.
+    Needed on destroy-replace: CloudFormation destroys the Baser table
+    (empty on redeploy) but the keeper secret survives with stale key
+    material. ks.salt / ks.bran are top-level attrs (the original salt) and
+    are NOT cleared — re-incepting from the preserved salt reproduces the
+    same non-transferable AID.
     """
-    for store_name in list(ks._stores):
-        try:
-            ks._clear_store(store_name)
-        except Exception:
-            pass
+    ks._data.clear()
+    ks._subdbs.clear()
+    ks._flush()
 
 
 def _ensure_witness_receipt(witness_aid, witness_url):
@@ -113,25 +113,6 @@ def _publish_self_endpoints():
         logger.warning("failed to register self-endpoints: %s", exc)
 
 
-def _load_salt(secret_id, region, direct=None):
-    """Resolve the qb64 salt for the mailbox AID.
-
-    Production: operator-held salt fetched from Secrets Manager (secret_id is
-    the secret name/ARN). The salt value is never stored in the template/stack.
-
-    `direct` is a LOCAL/DEV-ONLY override (raw qb64 salt via the MAILBOX_SALT
-    env) for `sam local` and unit tests — it is NEVER set by the deployed
-    template. Returns None when neither is configured (the caller treats that
-    as a hard error — the mailbox refuses to mint a non-recoverable AID)."""
-    if direct:
-        return direct
-    if not secret_id:
-        return None
-    import boto3
-    sm = boto3.client("secretsmanager", region_name=region)
-    return sm.get_secret_value(SecretId=secret_id)["SecretString"]
-
-
 def init():
     """Cold-start: set up Habery with DynamoDB, create/load mailbox Hab,
     do one-time witness round-trip on fresh inception, publish self-OOBI rpy,
@@ -146,7 +127,7 @@ def init():
 
     from keri.db.dynamodbing import DynamoDBer
     from keri.app.lambding import (
-        BASER_STORES, KEEPER_STORES, MAILBOXER_STORES,
+        BASER_STORES, MAILBOXER_STORES,
         setup_baser, setup_keeper, setup_mailboxer,
     )
     from keri.app.habbing import Habery
@@ -155,27 +136,14 @@ def init():
     name = os.environ.get("MAILBOX_NAME", "mailbox")
     alias = os.environ.get("MAILBOX_ALIAS", "mailbox")
     region = os.environ.get("MAILBOX_REGION", "us-east-1")
-    # Salt is operator-held offline and supplied via Secrets Manager — never as
-    # a plaintext template/stack value. MAILBOX_SALT_SECRET is the secret's
-    # name/ARN; the salt value is fetched here at cold start. MAILBOX_SALT is a
-    # local/dev-only direct override (never set by the deployed template).
-    salt = _load_salt(os.environ.get("MAILBOX_SALT_SECRET"), region,
-                      direct=os.environ.get("MAILBOX_SALT"))
     endpoint_url = os.environ.get("MAILBOX_ENDPOINT_URL")
     baser_table = os.environ.get("MAILBOX_BASER_TABLE") or f"{name}-db"
-    keeper_table = os.environ.get("MAILBOX_KEEPER_TABLE") or f"{name}-ks"
     # WITNESS_AID / WITNESS_URL are kept as env vars for forward compatibility
     # but are no longer used at init() time. keripy v2 forbids non-transferable
     # AIDs from declaring witnesses (eventing.py:2230); the mailbox AID is
     # self-anchored (trust via DNS, same model as the witness service).
     # Re-enabling witnessing requires switching the mailbox to a transferable
     # AID with next-key management.
-
-    if not salt:
-        raise RuntimeError(
-            "MAILBOX_SALT_SECRET must reference a Secrets Manager secret holding "
-            "the qb64 salt — refusing to mint a non-recoverable AID with a fresh salt"
-        )
 
     kwa = dict(region=region)
     if endpoint_url:
@@ -194,8 +162,24 @@ def init():
     setup_baser(db)
     setup_mailboxer(db)
 
-    ks = DynamoDBer.open(name=f"{name}-ks", stores=KEEPER_STORES,
-                         table_name=keeper_table, **kwa)
+    # Keeper: one KMS-encrypted secret per stack (NOT a DynamoDB -ks table).
+    # The secret is a single doc {v, salt, bran, keeper}: salt+bran are stored
+    # as plaintext JSON fields (KMS protects the whole secret at rest) and the
+    # keeper blob is ADDITIONALLY aeid-encrypted via bran. We get-or-create the
+    # secret here at cold start (race-safe CREATE-ONLY), minting a fresh
+    # salt+bran on first ever deploy; every later cold start reloads the SAME
+    # secret. Because the mailbox AID is non-transferable and salty-derived,
+    # re-incepting from the preserved salt always reproduces the same AID —
+    # which is what makes destroy-replace (empty Baser, surviving secret) safe.
+    from keri.db.secretkeeper import SecretStore, SecretKeeper
+    from keri.core.signing import Salter
+    keeper_secret = os.environ.get("MAILBOX_KEEPER_SECRET") or f"keri/{name}/keeper"
+    secret_endpoint = os.environ.get("MAILBOX_SECRET_ENDPOINT_URL") or None
+    store = SecretStore(region=region, endpoint_url=secret_endpoint)
+    store.get_or_create(keeper_secret, lambda: json.dumps({
+        "v": 1, "salt": Salter().qb64, "bran": Salter().qb64[2:23], "keeper": None,
+    }))
+    ks = SecretKeeper.open(store=store, secret_name=keeper_secret)
     setup_keeper(ks)
 
     # Detect partial-init state and recover
@@ -210,14 +194,16 @@ def init():
     cf = Configer(name=name, temp=True)  # Lambda only writes to /tmp
 
     try:
-        _hby = Habery(name=name, temp=False, free=True, db=db, ks=ks, cf=cf, salt=salt)
+        _hby = Habery(name=name, temp=False, free=True, db=db, ks=ks, cf=cf,
+                      salt=ks.salt, bran=ks.bran)
     except Exception as exc:
         if "Already incepted" in str(exc):
             logger.warning("Habery init hit 'Already incepted' (%s). "
                            "Clearing keeper and retrying.", exc)
             _clear_keeper(ks)
             setup_keeper(ks)
-            _hby = Habery(name=name, temp=False, free=True, db=db, ks=ks, cf=cf, salt=salt)
+            _hby = Habery(name=name, temp=False, free=True, db=db, ks=ks, cf=cf,
+                          salt=ks.salt, bran=ks.bran)
         else:
             raise
 
@@ -242,7 +228,7 @@ def init():
                 _clear_keeper(ks)
                 setup_keeper(ks)
                 _hby = Habery(name=name, temp=False, free=True,
-                              db=db, ks=ks, cf=cf, salt=salt)
+                              db=db, ks=ks, cf=cf, salt=ks.salt, bran=ks.bran)
                 _hab = _make_mailbox_hab()
             else:
                 raise

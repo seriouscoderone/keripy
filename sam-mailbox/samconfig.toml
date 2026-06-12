@@ -1,7 +1,7 @@
 # Shared SAM CLI defaults for the mailbox stack — NON-PERSONAL ONLY.
 #
 # Operator-specific values (AWS profile, stack-name suffix, DomainName,
-# HostedZoneId, MailboxSaltSecret, WitnessAid, WitnessUrl) are NOT in this file.
+# HostedZoneId, WitnessAid, WitnessUrl) are NOT in this file.
 # Pass them at deploy time:
 #
 #   AWS_PROFILE=<your-profile> sam deploy \
@@ -9,8 +9,12 @@
 #     --parameter-overrides \
 #         MailboxName=mailbox-<label> \
 #         DomainName=mailbox.<your-domain> \
-#         HostedZoneId=Z... \
-#         MailboxSaltSecret=mailbox/salt  (a Secrets Manager secret name)
+#         HostedZoneId=Z...
+#
+# No salt parameter is needed: the keeper secret (keri/<stack-name>/keeper)
+# holding the salt, bran, and KMS-encrypted keystore is auto-created by the
+# handler on first cold start and survives destroy-replace, so the mailbox AID
+# is reproducible across redeploys.
 #
 # For repeated personal use, copy this to `samconfig.local.toml` (gitignored)
 # and add `profile = "..."`, `stack_name = "..."`, etc. Then deploy with

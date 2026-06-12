@@ -23,15 +23,6 @@ Parameters:
     Type: String
     Default: mailbox
     Description: Base name for mailbox databases and resources
-  MailboxSaltSecret:
-    Type: String
-    AllowedPattern: '.+'
-    ConstraintDescription: MailboxSaltSecret is required (a Secrets Manager secret name/ARN)
-    Description: >
-      Name or ARN of an operator-created Secrets Manager secret holding the
-      qb64 salt for the mailbox AID. The salt VALUE is never stored in this
-      template/stack — only the secret reference. Required (the handler refuses
-      to mint a non-recoverable AID); hold the authoritative copy offline.
   MailboxAlias:
     Type: String
     Default: mailbox
@@ -52,10 +43,6 @@ Parameters:
     Type: String
     Description: Base URL of the witness service (currently informational only)
     Default: ""
-
-Conditions:
-  # Only grant secretsmanager:GetSecretValue when a salt secret is configured.
-  HasSaltSecret: !Not [!Equals [!Ref MailboxSaltSecret, ""]]
 
 Resources:
   # -----------------------------------------------------------------------
@@ -92,35 +79,10 @@ Resources:
           Projection:
             ProjectionType: ALL
 
-  # DynamoDB table for Keeper (private keys)
-  MailboxKeeperTable:
-    Type: AWS::DynamoDB::Table
-    Properties:
-      TableName: !Sub "${MailboxName}-ks"
-      BillingMode: PAY_PER_REQUEST
-      AttributeDefinitions:
-        - AttributeName: PK
-          AttributeType: S
-        - AttributeName: SK
-          AttributeType: S
-        - AttributeName: gsi_pk
-          AttributeType: S
-        - AttributeName: gsi_sk
-          AttributeType: S
-      KeySchema:
-        - AttributeName: PK
-          KeyType: HASH
-        - AttributeName: SK
-          KeyType: RANGE
-      GlobalSecondaryIndexes:
-        - IndexName: subdb-index
-          KeySchema:
-            - AttributeName: gsi_pk
-              KeyType: HASH
-            - AttributeName: gsi_sk
-              KeyType: RANGE
-          Projection:
-            ProjectionType: ALL
+  # Keeper is NOT a DynamoDB table — it lives in one KMS-encrypted Secrets
+  # Manager secret per stack (keri/${AWS::StackName}/keeper), get-or-created
+  # by the handler on first cold start. Salt+bran live inside that secret and
+  # the keeper key material is aeid-encrypted. See MailboxFunction policies.
 
   # -----------------------------------------------------------------------
   # API Gateway — explicit resources (Approach B from Phase 0).
@@ -237,8 +199,7 @@ Resources:
           MAILBOX_NAME: !Ref MailboxName
           MAILBOX_ALIAS: !Ref MailboxAlias
           MAILBOX_BASER_TABLE: !Ref MailboxBaserTable
-          MAILBOX_KEEPER_TABLE: !Ref MailboxKeeperTable
-          MAILBOX_SALT_SECRET: !Ref MailboxSaltSecret
+          MAILBOX_KEEPER_SECRET: !Sub "keri/${AWS::StackName}/keeper"
           MAILBOX_REGION: !Ref AWS::Region
           MAILBOX_ENDPOINT_URL: ""
           MAILBOX_URL: !Sub "https://${DomainName}"
@@ -249,18 +210,17 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref MailboxBaserTable
-        - DynamoDBCrudPolicy:
-            TableName: !Ref MailboxKeeperTable
-        # Read the operator-held salt from Secrets Manager (only when set).
-        # The "*" suffix covers the random 6-char suffix Secrets Manager
-        # appends to a name-based ARN; a full ARN matches as its own prefix.
-        - !If
-          - HasSaltSecret
-          - Statement:
-              - Effect: Allow
-                Action: secretsmanager:GetSecretValue
-                Resource: !Sub "arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${MailboxSaltSecret}*"
-          - !Ref AWS::NoValue
+        # The handler get-or-creates and reads/writes the keeper secret
+        # (keri/<stack>/keeper) on cold start, so it needs Create/Put as well
+        # as Get. Scoped to this stack's own keri/<stack>/* secrets. No
+        # DescribeSecret — SecretStore never calls it (least-privilege).
+        - Statement:
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+                - secretsmanager:CreateSecret
+                - secretsmanager:PutSecretValue
+              Resource: !Sub "arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:keri/${AWS::StackName}/*"
       # No Events: block — API GW routes are wired via explicit
       # MailboxRootMethod and MailboxProxyMethod resources above, and
       # invoke permission is granted via MailboxFunctionPermission.
@@ -327,6 +287,6 @@ Outputs:
   MailboxBaserTableName:
     Description: DynamoDB Baser table name
     Value: !Ref MailboxBaserTable
-  MailboxKeeperTableName:
-    Description: DynamoDB Keeper table name
-    Value: !Ref MailboxKeeperTable
+  MailboxKeeperSecret:
+    Description: Secrets Manager secret holding the keeper (salt+bran+keystore)
+    Value: !Sub "keri/${AWS::StackName}/keeper"

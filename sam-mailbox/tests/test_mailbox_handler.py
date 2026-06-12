@@ -397,42 +397,146 @@ async def test_stream_mbx_response_advances_cursor_across_polls():
 
 
 # ---------------------------------------------------------------------------
-# Task 2.8: init() cold-start validation
+# Task 2.8 / Task 8: init() cold-start on SecretKeeper — keeper-secret model.
+#
+# These two tests run the REAL init() under moto (mock_aws mocks BOTH DynamoDB
+# and Secrets Manager in-process). They override the autouse `mock_init`
+# fixture (which patches out init() for the unit tests above) by undoing the
+# monkeypatch and resetting the module singletons INCLUDING `_initialized`
+# (otherwise the `if _initialized: return` guard at the top of init() makes the
+# second call vacuous and the destroy-replace assertion meaningless).
 # ---------------------------------------------------------------------------
 
-def test_init_requires_mailbox_salt(monkeypatch):
-    """init() must raise if MAILBOX_SALT is missing — never mint a non-recoverable AID."""
-    import mailbox_handler
-    import importlib
+try:
+    from moto import mock_aws
+    HAS_MOTO = True
+except ImportError:
+    HAS_MOTO = False
 
-    # Re-import to get the original (un-mocked) init function.
-    # The autouse fixture mocked mailbox_handler.init, but we can reload
-    # the module in-process and grab the real function from a fresh import.
-    fresh = importlib.import_module("mailbox_handler")
-    # importlib.reload returns the same module object in-process; the autouse
-    # fixture has already replaced fresh.init. Instead, import the real function
-    # from source by directly referencing the module attribute before the mock
-    # runs — but since autouse has already run, we instead call the function
-    # object from the module's __dict__ under its original name by undoing the
-    # monkeypatch for 'mailbox_handler.init' and then setting _initialized=False.
-    monkeypatch.undo()  # undo ALL monkeypatches so far, including autouse mock
-    monkeypatch.delenv("MAILBOX_SALT", raising=False)
-    monkeypatch.delenv("MAILBOX_SALT_SECRET", raising=False)
-    monkeypatch.setattr(mailbox_handler, "_initialized", False)
-    with pytest.raises(RuntimeError) as exc_info:
+needs_moto = pytest.mark.skipif(not HAS_MOTO, reason="requires moto")
+
+_MB_REGION = "us-east-1"
+_MB_BASER_TABLE = "mailbox-test-db"
+_MB_KEEPER_SECRET = "keri/mailbox-test/keeper"
+
+
+def _mb_create_baser_table():
+    """Create the mailbox Baser DynamoDB table mirroring template.yaml's
+    PK/SK + subdb-index GSI schema. (No keeper table — that's gone.)"""
+    import boto3
+    client = boto3.client("dynamodb", region_name=_MB_REGION)
+    client.create_table(
+        TableName=_MB_BASER_TABLE,
+        BillingMode="PAY_PER_REQUEST",
+        AttributeDefinitions=[
+            {"AttributeName": "PK", "AttributeType": "S"},
+            {"AttributeName": "SK", "AttributeType": "S"},
+            {"AttributeName": "gsi_pk", "AttributeType": "S"},
+            {"AttributeName": "gsi_sk", "AttributeType": "S"},
+        ],
+        KeySchema=[
+            {"AttributeName": "PK", "KeyType": "HASH"},
+            {"AttributeName": "SK", "KeyType": "RANGE"},
+        ],
+        GlobalSecondaryIndexes=[{
+            "IndexName": "subdb-index",
+            "KeySchema": [
+                {"AttributeName": "gsi_pk", "KeyType": "HASH"},
+                {"AttributeName": "gsi_sk", "KeyType": "RANGE"},
+            ],
+            "Projection": {"ProjectionType": "ALL"},
+        }],
+    )
+    client.get_waiter("table_exists").wait(TableName=_MB_BASER_TABLE)
+
+
+def _mb_drop_baser_table():
+    import boto3
+    client = boto3.client("dynamodb", region_name=_MB_REGION)
+    client.delete_table(TableName=_MB_BASER_TABLE)
+    client.get_waiter("table_not_exists").wait(TableName=_MB_BASER_TABLE)
+
+
+def _mb_read_keeper_secret():
+    import boto3
+    resp = boto3.client("secretsmanager", region_name=_MB_REGION
+                        ).get_secret_value(SecretId=_MB_KEEPER_SECRET)
+    return json.loads(resp["SecretString"])
+
+
+def _mb_set_env(monkeypatch):
+    monkeypatch.undo()   # drop the autouse mock_init so the REAL init() runs
+    monkeypatch.setenv("MAILBOX_NAME", "mailbox-test")
+    monkeypatch.setenv("MAILBOX_ALIAS", "mailbox")
+    monkeypatch.setenv("MAILBOX_REGION", _MB_REGION)
+    monkeypatch.setenv("MAILBOX_URL", "")          # skip self-endpoint publish
+    monkeypatch.setenv("MAILBOX_KEEPER_SECRET", _MB_KEEPER_SECRET)
+    monkeypatch.setenv("MAILBOX_BASER_TABLE", _MB_BASER_TABLE)
+    # Leave MAILBOX_ENDPOINT_URL / MAILBOX_SECRET_ENDPOINT_URL UNSET so moto
+    # intercepts the default AWS endpoints for both DynamoDB and SM.
+    monkeypatch.delenv("MAILBOX_ENDPOINT_URL", raising=False)
+    monkeypatch.delenv("MAILBOX_SECRET_ENDPOINT_URL", raising=False)
+
+
+def _mb_reset_singletons(mailbox_handler):
+    # Reset _initialized too — otherwise the `if _initialized: return` guard
+    # short-circuits the second init() and the redeploy test is vacuous.
+    mailbox_handler._hby = mailbox_handler._hab = mailbox_handler._parser = None
+    mailbox_handler._initialized = False
+
+
+@needs_moto
+def test_destroy_replace_reproduces_same_aid(monkeypatch):
+    import mailbox_handler
+    with mock_aws():
+        _mb_set_env(monkeypatch)
+        _mb_create_baser_table()
+
+        # --- Cold start: get-or-create keeper secret + incept ---
+        _mb_reset_singletons(mailbox_handler)
         mailbox_handler.init()
-    assert "MAILBOX_SALT" in str(exc_info.value)
+        pre1 = mailbox_handler._hab.pre
+        assert pre1 and pre1.startswith(("B", "D"))  # non-transferable mailbox
+
+        # The keeper secret now exists with salt + a >=21-char bran + a
+        # non-null keeper blob (incept populated + auto-flushed the keystore).
+        doc = _mb_read_keeper_secret()
+        assert isinstance(doc["salt"], str) and doc["salt"]
+        assert isinstance(doc["bran"], str) and len(doc["bran"]) >= 21
+        assert doc["keeper"] is not None
+
+        # --- Simulate destroy-replace: wipe the Baser table EMPTY, keep the
+        # keeper secret untouched (CloudFormation destroys the -db table on a
+        # destroy-replace; the SM secret survives). ---
+        _mb_drop_baser_table()
+        _mb_create_baser_table()
+        salt_before = _mb_read_keeper_secret()["salt"]
+
+        _mb_reset_singletons(mailbox_handler)
+        mailbox_handler.init()
+        pre2 = mailbox_handler._hab.pre
+
+        # The salt was preserved across the wipe...
+        assert _mb_read_keeper_secret()["salt"] == salt_before
+        # ...so re-inception reproduces the SAME mailbox AID. This is the
+        # assertion that proves destroy-replace safety.
+        assert pre2 == pre1
 
 
-def test_load_salt_direct_override_is_local_dev_path():
-    """A direct qb64 salt (local/dev MAILBOX_SALT) is returned as-is, no AWS call."""
+@needs_moto
+def test_keeper_is_encrypted(monkeypatch):
     import mailbox_handler
-    assert mailbox_handler._load_salt(None, "us-east-1", direct="0AB123") == "0AB123"
+    with mock_aws():
+        _mb_set_env(monkeypatch)
+        _mb_create_baser_table()
 
+        _mb_reset_singletons(mailbox_handler)
+        mailbox_handler.init()
 
-def test_load_salt_returns_none_when_nothing_configured():
-    """No secret + no direct override ⇒ None (caller raises; never mints)."""
-    import mailbox_handler
-    assert mailbox_handler._load_salt(None, "us-east-1") is None
-    # The Secrets Manager fetch branch (secret_id set) uses the same boto3
-    # pattern proven by service-aid's test_load_bran_from_secrets_manager (moto).
+        # bran engaged aeid: the keeper is ENCRYPTED for the first time.
+        assert mailbox_handler._hby.ks.gbls.get("aeid") is not None
+
+        # The keeper's bran is the 21-char value carried in the secret.
+        ks = mailbox_handler._hby.ks
+        assert len(ks.bran) == 21
+        assert ks.bran == _mb_read_keeper_secret()["bran"]
