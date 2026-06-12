@@ -246,6 +246,21 @@ def run_assertions(client_a, table):
          lambda: client_a.get_item(TableName=table, Key={
              "PK": {"S": f"{b}#{SUBDB}#{hexk('event0')}"}, "SK": {"S": "."}}), DENY,
          "point read must be blocked too"),
+        # ── write path ────────────────────────────────────────────────────
+        ("base: own PutItem (tenanta)",
+         lambda: client_a.put_item(TableName=table, Item=normal_item(a, "writetest")), ALLOW,
+         "same-tenant write must work (control)"),
+        ("base: cross-tenant PutItem (tenantb)  <<< WRITE CRUX",
+         lambda: client_a.put_item(TableName=table, Item=normal_item(b, "poison")), DENY,
+         "must not write into another tenant's namespace"),
+        ("base: cross-tenant DeleteItem (tenantb)",
+         lambda: client_a.delete_item(TableName=table, Key={
+             "PK": {"S": f"{b}#{SUBDB}#{hexk('event0')}"}, "SK": {"S": "."}}), DENY,
+         "must not delete another tenant's records"),
+        ("base: cross-tenant BatchWriteItem (tenantb)",
+         lambda: client_a.batch_write_item(RequestItems={
+             table: [{"PutRequest": {"Item": normal_item(b, "poison2")}}]}), DENY,
+         "bulk write path must be scoped too"),
     ]
 
     rows, ok = [], True
@@ -265,16 +280,19 @@ def print_report(rows, ok):
         print(f"  [{status:>8}] {name}")
         print(f"             expected={expected:5} got={verdict:5}  ({detail})  — {why}")
     print("-" * 100)
-    crux = next(r for r in rows if "CRUX" in r[0])
+    crux_leaks = [r for r in rows if "CRUX" in r[0] and r[2] == ALLOW]
     if ok:
-        print("VERDICT: ✅ LeadingKeys ENFORCES the multi-tenant boundary on GSI queries.")
-        print("         The pooled-core-table design is sound. Cross-tenant index reads are DENIED.")
+        print("VERDICT: ✅ LeadingKeys ENFORCES the multi-tenant boundary on the GSI AND the")
+        print("         write path. Pooled-core-table design is sound: cross-tenant reads,")
+        print("         index reads, and writes are all DENIED; same-tenant ops ALLOW.")
     else:
         print("VERDICT: ❌ One or more assertions FAILED. Inspect above.")
-        if crux[2] == ALLOW:
-            print("         CRITICAL: the cross-tenant GSI query was ALLOWED — the index boundary is")
-            print("         VACUOUS. The pooled design leaks across tenants and MUST be reworked")
-            print("         (per-tenant tables, or per-namespace payload encryption) before pooling.")
+        for r in crux_leaks:
+            print(f"         CRITICAL: a cross-tenant CRUX op was ALLOWED — {r[0]}")
+        if crux_leaks:
+            print("         The boundary is VACUOUS for that path. The pooled design leaks across")
+            print("         tenants and MUST be reworked (per-tenant tables, or per-namespace")
+            print("         payload encryption) before pooling anything multi-tenant.")
     print("=" * 100 + "\n")
 
 
