@@ -946,10 +946,19 @@ class DynamoDBer:
         existing_raw = list(self._get_ioset_raw(db, key, sep=sep))
         max_ion = max((ion for ion, _ in existing_raw), default=-1)
 
+        # Land at the first free ion via strongly-consistent conditional puts, advancing
+        # locally on collision — no silent overwrite under concurrent writers / GSI lag.
+        # (Cross-writer dedup stays best-effort; perfect dedup would need a transaction.)
         ion = max_ion + 1
-        iokey = suffix(key, ion, sep=sep)
-        self._put_item(db, iokey, _SK_SINGLE, val, gsi_sk=_hex(iokey))
-        return True
+        for _ in range(_APPEND_MAX_RETRY):
+            iokey = suffix(key, ion, sep=sep)
+            if self._put_item(db, iokey, _SK_SINGLE, val, gsi_sk=_hex(iokey),
+                              condition="attribute_not_exists(PK)"):
+                return True
+            ion += 1
+        raise ValueError(
+            f"Failed adding IoSet val at {key=} after {_APPEND_MAX_RETRY} attempts "
+            "(excessive contention).")
 
     def getIoSetItemIter(self, db: DynamoSubDb, key: bytes,
                          *, ion: int = 0,

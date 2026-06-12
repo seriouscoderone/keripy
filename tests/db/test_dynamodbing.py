@@ -430,6 +430,25 @@ class TestIoSetOps:
         vals = [v for _, v in items]
         assert vals == [b"a", b"b"]
 
+    def test_addIoSetVal_does_not_overwrite_on_stale_max(self, dber):
+        """Under a stale GSI (concurrent-writer race), addIoSetVal must NOT overwrite an
+        existing ion — it advances via conditional put. (Pre-fix: unconditional put
+        silently overwrote the value at the colliding ion.)"""
+        sdb = dber.env.open_db(b"test.")
+        assert dber.addIoSetVal(sdb, b"k", b"first") is True       # real item at ion=0
+        # Simulate GSI lag: dedup + max-ion queries report the set as empty,
+        # so the method computes ion=0 (already taken by b"first").
+        dber._get_ioset_raw = lambda *a, **k: []
+        dber._get_ioset_items = lambda *a, **k: []
+        assert dber.addIoSetVal(sdb, b"k", b"second") is True      # must advance, not overwrite
+        # Restore real helpers before reading back (getIoSetItemIter also calls _get_ioset_raw).
+        del dber._get_ioset_raw
+        del dber._get_ioset_items
+        vals = [v for _, v in dber.getIoSetItemIter(sdb, b"k")]
+        assert b"first" in vals     # NOT overwritten
+        assert b"second" in vals    # landed at next free ion
+        assert len(vals) == 2
+
     def test_getIoSetLastItem(self, dber):
         sdb = dber.env.open_db(b"test.")
         dber.putIoSetVals(sdb, b"key1", [b"a", b"b", b"c"])
