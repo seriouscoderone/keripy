@@ -56,3 +56,23 @@ def test_put_updates_existing():
         store.put("keri/svc/keeper", '{"v":1,"n":1}')
         store.put("keri/svc/keeper", '{"v":1,"n":2}')          # deliberate overwrite
         assert store.get("keri/svc/keeper") == '{"v":1,"n":2}'  # second value wins
+
+
+from keri.db.secretkeeper import dumpKeeper, loadKeeper
+
+
+def test_keeper_blob_roundtrip_bytes_values():
+    data = {"gbls.": {"6165696400": b"aeid-value"},   # hex key -> bytes val
+            "pris.": {"deadbeef": b"\x00\x01\x02ciphertext"}}
+    blob = dumpKeeper(data)
+    assert isinstance(blob, str)                 # base64 ascii, JSON-safe
+    assert loadKeeper(blob) == data              # exact round-trip incl bytes
+
+
+def test_keeper_blob_empty():
+    assert loadKeeper(dumpKeeper({})) == {}
+
+
+def test_keeper_blob_none_loads_empty():
+    assert loadKeeper(None) == {}
+    assert loadKeeper("") == {}

@@ -8,6 +8,38 @@ keeper — keripy's Keeper/Manager/aeid surface is unchanged.
 """
 from __future__ import annotations
 
+import base64
+import json
+import zlib
+
+_BLOB_VERSION = 1
+
+
+def dumpKeeper(data: dict[str, dict[str, bytes]]) -> str:
+    """Serialize the keeper dict to a compressed, base64-ascii blob.
+
+    data: {subdb_name: {hex_key: value_bytes}}. Values are bytes (CESR);
+    base64-encoded for JSON transport, then the whole doc is zlib-compressed.
+    """
+    payload = {"v": _BLOB_VERSION,
+               "d": {sub: {k: base64.b64encode(v).decode("ascii")
+                           for k, v in items.items()}
+                     for sub, items in data.items()}}
+    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    return base64.b64encode(zlib.compress(raw)).decode("ascii")
+
+
+def loadKeeper(blob: str | None) -> dict[str, dict[str, bytes]]:
+    """Inverse of dumpKeeper. None/empty -> {} (fresh keeper)."""
+    if not blob:
+        return {}
+    raw = zlib.decompress(base64.b64decode(blob))
+    payload = json.loads(raw)
+    if payload.get("v") != _BLOB_VERSION:
+        raise ValueError(f"unsupported keeper blob version: {payload.get('v')}")
+    return {sub: {k: base64.b64decode(v) for k, v in items.items()}
+            for sub, items in payload["d"].items()}
+
 
 class SecretStore:
     """Thin pluggable secret-store client. Secrets Manager by default; SSM
