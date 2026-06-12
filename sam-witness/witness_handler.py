@@ -15,38 +15,17 @@ _parser = None
 
 
 def _clear_keeper(ks):
-    """Remove all data from keeper stores so Habery init can start fresh.
+    """Wipe all keeper key material so Habery init can re-incept from scratch.
 
-    This is needed when a previous init attempt partially succeeded (wrote key
-    material to the keeper) but failed before the Baser's signatory record
-    was written, leaving the two databases out of sync.
+    Needed on destroy-replace: CloudFormation destroys the Baser table
+    (empty on redeploy) but the keeper secret survives with stale key
+    material. ks.salt / ks.bran are top-level attrs (the original salt) and
+    are NOT cleared — re-incepting from the preserved salt reproduces the
+    same non-transferable AID.
     """
-    for store_name in list(ks._stores):
-        try:
-            ks._clear_store(store_name)
-        except Exception:
-            pass
-
-
-def _load_salt(secret_id, region, direct=None):
-    """Resolve the qb64 salt for key derivation.
-
-    Production: operator-held salt fetched from Secrets Manager (secret_id is
-    the secret name/ARN). The salt value is never stored in the template/stack.
-
-    `direct` is a LOCAL/DEV-ONLY override (a raw qb64 salt via the WITNESS_SALT
-    env) for `sam local` and unit tests — it is NEVER set by the deployed
-    template. Returns None when neither is configured (caller mints a fresh
-    salt → non-reproducible AID; dev/throwaway only)."""
-    if direct:
-        return direct
-    if not secret_id:
-        logger.warning("WITNESS_SALT_SECRET not set — minting a random salt; "
-                       "this stack will have a NON-reproducible AID")
-        return None
-    import boto3
-    sm = boto3.client("secretsmanager", region_name=region)
-    return sm.get_secret_value(SecretId=secret_id)["SecretString"]
+    ks._data.clear()
+    ks._subdbs.clear()
+    ks._flush()
 
 
 def init():
@@ -55,7 +34,7 @@ def init():
 
     from keri.db.dynamodbing import DynamoDBer
     from keri.app.lambding import (
-        BASER_STORES, KEEPER_STORES,
+        BASER_STORES,
         setup_baser, setup_keeper,
     )
     from keri.app.habbing import Habery
@@ -64,20 +43,11 @@ def init():
     name = os.environ.get("WITNESS_NAME", "witness")
     alias = os.environ.get("WITNESS_ALIAS", "witness")
     region = os.environ.get("WITNESS_REGION", "us-east-1")
-    # Salt is operator-held offline and supplied via Secrets Manager — never as
-    # a plaintext template/stack value. WITNESS_SALT_SECRET is the secret's
-    # name/ARN; the salt value is fetched here at cold start. WITNESS_SALT is a
-    # local/dev-only direct override (never set by the deployed template).
-    salt = _load_salt(os.environ.get("WITNESS_SALT_SECRET"), region,
-                      direct=os.environ.get("WITNESS_SALT"))
     endpoint_url = os.environ.get("WITNESS_ENDPOINT_URL")
     baser_table = os.environ.get("WITNESS_BASER_TABLE")
-    keeper_table = os.environ.get("WITNESS_KEEPER_TABLE")
 
     if baser_table is None:
         baser_table = f"{name}-db"
-    if keeper_table is None:
-        keeper_table = f"{name}-ks"
 
     kwa = dict(region=region)
     if endpoint_url:
@@ -99,13 +69,28 @@ def init():
     db = DynamoDBer.open(name=name, stores=BASER_STORES, table_name=baser_table, **kwa)
     setup_baser(db)
 
-    ks = DynamoDBer.open(name=f"{name}-ks", stores=KEEPER_STORES, table_name=keeper_table, **kwa)
+    # Keeper: one KMS-encrypted secret per stack (NOT a DynamoDB -ks table).
+    # The secret is a single doc {v, salt, bran, keeper}: salt+bran are stored
+    # as plaintext JSON fields (KMS protects the whole secret at rest) and the
+    # keeper blob is ADDITIONALLY aeid-encrypted via bran. We get-or-create the
+    # secret here at cold start (race-safe CREATE-ONLY), minting a fresh
+    # salt+bran on first ever deploy; every later cold start reloads the SAME
+    # secret. Because the witness is non-transferable and salty-derived,
+    # re-incepting from the preserved salt always reproduces the same AID —
+    # which is what makes destroy-replace (empty Baser, surviving secret) safe.
+    from keri.db.secretkeeper import SecretStore, SecretKeeper
+    from keri.core.signing import Salter
+    keeper_secret = os.environ.get("WITNESS_KEEPER_SECRET") or f"keri/{name}/keeper"
+    secret_endpoint = os.environ.get("WITNESS_SECRET_ENDPOINT_URL") or None
+    store = SecretStore(region=region, endpoint_url=secret_endpoint)
+    store.get_or_create(keeper_secret, lambda: json.dumps({
+        "v": 1,
+        "salt": Salter().qb64,
+        "bran": Salter().qb64[2:23],     # 21 chars — keripy aeid minimum
+        "keeper": None,
+    }))
+    ks = SecretKeeper.open(store=store, secret_name=keeper_secret)
     setup_keeper(ks)
-
-    # Use provided salt or generate a fresh one
-    if not salt:
-        from keri.core.signing import Salter
-        salt = Salter().qb64
 
     # Detect inconsistent state from a previously failed init: the keeper has
     # key material (pidx written) but the baser lacks the signatory record.
@@ -124,14 +109,16 @@ def init():
     cf = Configer(name=name, temp=True)
 
     try:
-        _hby = Habery(name=name, temp=False, free=True, db=db, ks=ks, cf=cf, salt=salt)
+        _hby = Habery(name=name, temp=False, free=True, db=db, ks=ks, cf=cf,
+                      salt=ks.salt, bran=ks.bran)
     except (ValueError, Exception) as exc:
         if "Already incepted" in str(exc):
             logger.warning("Habery init hit 'Already incepted' (%s). "
                            "Clearing keeper and retrying.", exc)
             _clear_keeper(ks)
             setup_keeper(ks)
-            _hby = Habery(name=name, temp=False, free=True, db=db, ks=ks, cf=cf, salt=salt)
+            _hby = Habery(name=name, temp=False, free=True, db=db, ks=ks, cf=cf,
+                          salt=ks.salt, bran=ks.bran)
         else:
             raise
 

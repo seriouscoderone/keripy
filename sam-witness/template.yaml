@@ -21,16 +21,6 @@ Parameters:
     Type: String
     Default: witness
     Description: Base name for witness databases and resources
-  WitnessSaltSecret:
-    Type: String
-    Default: ""
-    Description: >
-      Name or ARN of an operator-created Secrets Manager secret holding the
-      qb64 salt for key derivation. The salt VALUE is never stored in this
-      template/stack — only the secret reference. Hold the authoritative copy
-      offline; create the secret with `aws secretsmanager create-secret`.
-      Leave empty ONLY for throwaway/dev stacks (the handler then mints a
-      random salt on first cold start — a different AID each fresh deploy).
   WitnessAlias:
     Type: String
     Default: witness
@@ -43,10 +33,6 @@ Parameters:
     Type: String
     Description: Route53 hosted zone ID for DomainName (must be created out-of-band)
     AllowedPattern: '^Z[A-Z0-9]+$'
-
-Conditions:
-  # Only grant secretsmanager:GetSecretValue when a salt secret is configured.
-  HasSaltSecret: !Not [!Equals [!Ref WitnessSaltSecret, ""]]
 
 Resources:
   # DynamoDB table for Baser (KEL events, escrows, state, reger, mailboxer)
@@ -79,35 +65,10 @@ Resources:
           Projection:
             ProjectionType: ALL
 
-  # DynamoDB table for Keeper (private keys, key parameters)
-  WitnessKeeperTable:
-    Type: AWS::DynamoDB::Table
-    Properties:
-      TableName: !Sub "${WitnessName}-ks"
-      BillingMode: PAY_PER_REQUEST
-      AttributeDefinitions:
-        - AttributeName: PK
-          AttributeType: S
-        - AttributeName: SK
-          AttributeType: S
-        - AttributeName: gsi_pk
-          AttributeType: S
-        - AttributeName: gsi_sk
-          AttributeType: S
-      KeySchema:
-        - AttributeName: PK
-          KeyType: HASH
-        - AttributeName: SK
-          KeyType: RANGE
-      GlobalSecondaryIndexes:
-        - IndexName: subdb-index
-          KeySchema:
-            - AttributeName: gsi_pk
-              KeyType: HASH
-            - AttributeName: gsi_sk
-              KeyType: RANGE
-          Projection:
-            ProjectionType: ALL
+  # Keeper is NOT a DynamoDB table — it lives in one KMS-encrypted Secrets
+  # Manager secret per stack (keri/${AWS::StackName}/keeper), get-or-created
+  # by the handler on first cold start. Salt+bran live inside that secret and
+  # the keeper key material is aeid-encrypted. See WitnessFunction policies.
 
   # Lambda function (container image with Python 3.14)
   WitnessFunction:
@@ -122,8 +83,7 @@ Resources:
           WITNESS_NAME: !Ref WitnessName
           WITNESS_ALIAS: !Ref WitnessAlias
           WITNESS_BASER_TABLE: !Ref WitnessBaserTable
-          WITNESS_KEEPER_TABLE: !Ref WitnessKeeperTable
-          WITNESS_SALT_SECRET: !Ref WitnessSaltSecret
+          WITNESS_KEEPER_SECRET: !Sub "keri/${AWS::StackName}/keeper"
           WITNESS_REGION: !Ref AWS::Region
           WITNESS_ENDPOINT_URL: ""
           WITNESS_URL: !Sub "https://${DomainName}"
@@ -131,18 +91,17 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref WitnessBaserTable
-        - DynamoDBCrudPolicy:
-            TableName: !Ref WitnessKeeperTable
-        # Read the operator-held salt from Secrets Manager (only when set).
-        # The "*" suffix covers the random 6-char suffix Secrets Manager
-        # appends to a name-based ARN; a full ARN matches as its own prefix.
-        - !If
-          - HasSaltSecret
-          - Statement:
-              - Effect: Allow
-                Action: secretsmanager:GetSecretValue
-                Resource: !Sub "arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${WitnessSaltSecret}*"
-          - !Ref AWS::NoValue
+        # The handler get-or-creates and reads/writes the keeper secret
+        # (keri/<stack>/keeper) on cold start, so it needs Create/Put as well
+        # as Get/Describe. Scoped to this stack's own keri/<stack>/* secrets.
+        - Statement:
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+                - secretsmanager:DescribeSecret
+                - secretsmanager:CreateSecret
+                - secretsmanager:PutSecretValue
+              Resource: !Sub "arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:keri/${AWS::StackName}/*"
       Events:
         PostRoot:
           Type: Api
@@ -254,6 +213,6 @@ Outputs:
   WitnessBaserTableName:
     Description: DynamoDB Baser table name
     Value: !Ref WitnessBaserTable
-  WitnessKeeperTableName:
-    Description: DynamoDB Keeper table name
-    Value: !Ref WitnessKeeperTable
+  WitnessKeeperSecret:
+    Description: Secrets Manager secret holding the keeper (salt+bran+keystore)
+    Value: !Sub "keri/${AWS::StackName}/keeper"
