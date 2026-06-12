@@ -15,7 +15,6 @@ from aws_cdk import Duration, CustomResource
 from aws_cdk import aws_lambda as _lambda
 from aws_cdk import aws_apigateway as apigw
 from aws_cdk import aws_dynamodb as ddb
-from aws_cdk import aws_secretsmanager as sm
 from aws_cdk import aws_iam as iam
 from aws_cdk import custom_resources as cr
 from constructs import Construct
@@ -25,14 +24,13 @@ class ServiceAid(Construct):
     """One Service AID: container Lambda over the shared core table (own namespace)
     + a keeper secret + inception Custom Resource.
 
-    TODO(Task 6 / secret-keeper): this construct still provisions the LEGACY
-    ``{alias}-ks`` DynamoDB keeper table + auto-minted ``{alias}/bran`` secret
-    and sets ``SERVICEAID_KEEPER_TABLE`` / ``SERVICEAID_BRAN_SECRET`` — env vars
-    the runtime NO LONGER reads (it now loads a single ``keri/<alias>/keeper``
-    Secrets Manager secret holding {salt, bran, keeper-blob}). ``cdk deploy``
-    from this commit therefore produces a NON-FUNCTIONAL stack until Task 6
-    replaces this construct (drop the -ks table + bran secret, provision the
-    keeper secret via get-or-create, set ``SERVICEAID_KEEPER_SECRET``).
+    The keeper lives in ONE KMS-encrypted Secrets Manager secret per stack,
+    ``keri/<alias>/keeper`` (JSON ``{v, salt, bran, keeper-blob}``). This
+    construct does NOT create that secret in CloudFormation — the inception
+    Custom Resource get-or-creates it at deploy time (race-safe, create-only)
+    so the salt/bran exist before the first incept and survive stack churn.
+    The construct only sets ``SERVICEAID_KEEPER_SECRET`` (the secret name) and
+    grants the function role scoped Secrets Manager access on ``keri/<alias>/*``.
 
     The pooled core table is referenced by name only (``core_table_name``).
     IAM access is scoped to this service's namespace prefixes via
@@ -40,9 +38,6 @@ class ServiceAid(Construct):
 
     * ``{alias}:*#*``        – KEL + TEL rows
     * ``__meta__#{alias}:*`` – keripy meta rows
-
-    The keeper table is a dedicated, encrypted DynamoDB table that holds the
-    private key material for this service's AID only (never pooled).
 
     Inception happens via a CloudFormation Custom Resource that reuses the
     service Lambda as its ``on_event_handler``.  ``handler.py`` routes events
@@ -85,15 +80,6 @@ class ServiceAid(Construct):
         **kw,
     ):
         super().__init__(scope, cid, **kw)
-        # ╔══════════════════════════════════════════════════════════════════╗
-        # ║ TODO(Task 6 / secret-keeper): STALE — produces a NON-FUNCTIONAL    ║
-        # ║ stack. The keeper resources below ({alias}-ks DynamoDB table +     ║
-        # ║ auto-minted {alias}/bran secret) and the SERVICEAID_KEEPER_TABLE / ║
-        # ║ SERVICEAID_BRAN_SECRET env vars are NO LONGER read by the runtime, ║
-        # ║ which now loads a single keri/<alias>/keeper Secrets Manager       ║
-        # ║ secret. Task 6 replaces this with keeper-secret provisioning +     ║
-        # ║ SERVICEAID_KEEPER_SECRET. Do NOT `cdk deploy` this commit.         ║
-        # ╚══════════════════════════════════════════════════════════════════╝
         if not re.fullmatch(r"[a-z0-9-]+", alias):
             raise ValueError(f"alias must match [a-z0-9-]+ (got {alias!r}) — "
                              "it is interpolated into IAM LeadingKeys patterns")
@@ -102,46 +88,15 @@ class ServiceAid(Construct):
         # ── Tier-1 reference: shared core table (not owned by this stack) ──────
         core_table = ddb.Table.from_table_name(self, "CoreTable", core_table_name)
 
-        # ── Tier-2: isolated, encrypted keeper table (never pooled) ─────────────
-        keeper_table = ddb.Table(
-            self,
-            "KeeperTable",
-            table_name=f"{alias}-ks",
-            partition_key=ddb.Attribute(name="PK", type=ddb.AttributeType.STRING),
-            sort_key=ddb.Attribute(name="SK", type=ddb.AttributeType.STRING),
-            billing_mode=ddb.BillingMode.PAY_PER_REQUEST,
-            encryption=ddb.TableEncryption.AWS_MANAGED,
-        )
-        keeper_table.add_global_secondary_index(
-            index_name="subdb-index",
-            partition_key=ddb.Attribute(
-                name="gsi_pk", type=ddb.AttributeType.STRING
-            ),
-            sort_key=ddb.Attribute(
-                name="gsi_sk", type=ddb.AttributeType.STRING
-            ),
-        )
-
-        # ── Keeper passcode (bran) — generated once, never logged ───────────────
-        bran = sm.Secret(
-            self,
-            "KeeperBran",
-            secret_name=f"{alias}/bran",
-            generate_secret_string=sm.SecretStringGenerator(
-                password_length=32, exclude_punctuation=True
-            ),
-        )
-
         env = {
             "SERVICEAID_ALIAS": alias,
             "SERVICEAID_CORE_TABLE": core_table_name,
-            "SERVICEAID_KEEPER_TABLE": keeper_table.table_name,
+            "SERVICEAID_KEEPER_SECRET": f"keri/{alias}/keeper",
             "SERVICEAID_WITNESSES": ",".join(witnesses),
             "SERVICEAID_TOAD": str(toad),
             "SERVICEAID_ALLOWLIST": ",".join(allowlist or []),
             "SERVICEAID_REQUIRED_SCHEMA": required_schema,
             "SERVICEAID_HANDLER": handler_module,
-            "SERVICEAID_BRAN_SECRET": bran.secret_name,
             # config._dynamo_kwa passes region=cfg.region explicitly to boto3,
             # and cfg.region defaults to "us-east-1" when this env var is absent
             # — which would override Lambda's real AWS_REGION. Set it explicitly.
@@ -163,10 +118,16 @@ class ServiceAid(Construct):
         )
 
         # ── IAM ──────────────────────────────────────────────────────────────────
-        # Keeper table: full CRUD (only this service's AID lives here).
-        keeper_table.grant_read_write_data(fn)
-        # Bran secret: read-only.
-        bran.grant_read(fn)
+        # Keeper secret: scoped to this service's keri/<alias>/* namespace. The
+        # fn doubles as the inception CR handler, so it needs both read
+        # (steady-state runtime) and create/put (CR get-or-create).
+        keeper_secret_arn = f"arn:aws:secretsmanager:*:*:secret:keri/{alias}/*"
+        fn.add_to_role_policy(iam.PolicyStatement(
+            actions=["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret",
+                     "secretsmanager:CreateSecret", "secretsmanager:PutSecretValue"],
+            resources=[keeper_secret_arn]))
+        # NOTE: CreateSecret/PutSecretValue are needed only by the inception CR;
+        # a dedicated CR role would let the steady-state fn be GetSecretValue-only.
         # Core (pooled) table: scoped to this service's namespace prefixes only.
         #
         # SECURITY-CRITICAL + UNVERIFIED: the multi-tenant boundary for the

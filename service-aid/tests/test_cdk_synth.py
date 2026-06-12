@@ -58,11 +58,22 @@ def test_service_aid_construct_provisions_lambda_apigw_keeper(tmp_path):
     t = Template.from_stack(stack)
     # cr.Provider synthesizes its own framework Lambda(s), so don't count
     # functions — assert the service function exists by name/env instead.
-    t.resource_count_is("AWS::DynamoDB::Table", 1)         # isolated keeper table
-    t.resource_count_is("AWS::SecretsManager::Secret", 1)  # keeper bran
+    #
+    # The construct owns NO DynamoDB tables (the core table is referenced by
+    # name via from_table_name) and creates NO SecretsManager secret — the
+    # keeper secret keri/<alias>/keeper is get-or-created at deploy time by the
+    # inception Custom Resource, not declared in CloudFormation.
+    t.resource_count_is("AWS::DynamoDB::Table", 0)
+    t.resource_count_is("AWS::SecretsManager::Secret", 0)
     t.has_resource_properties("AWS::Lambda::Function", {
         "FunctionName": "rating-serviceaid",
         "Environment": {"Variables": {"SERVICEAID_ALIAS": "rating"}}
+    })
+    # The keeper secret NAME must be wired into the runtime via env so the
+    # runtime + the inception CR address the same secret.
+    t.has_resource_properties("AWS::Lambda::Function", {
+        "FunctionName": "rating-serviceaid",
+        "Environment": {"Variables": {"SERVICEAID_KEEPER_SECRET": "keri/rating/keeper"}}
     })
     # Authz config must be reachable through the construct: allowlist is
     # comma-joined into SERVICEAID_ALLOWLIST so the working allowlist policy
@@ -87,6 +98,25 @@ def test_service_aid_construct_provisions_lambda_apigw_keeper(tmp_path):
                     and "ForAllValues:StringLike" in stmt["Condition"]):
                 found = True
     assert found, "scoped core-table policy must include dynamodb:DescribeTable"
+
+    # The function role must grant scoped Secrets Manager read on the keeper
+    # secret namespace keri/rating/*. The fn doubles as the inception CR
+    # handler, so GetSecretValue (runtime read) must be present and the
+    # resource must match the per-alias namespace.
+    secret_found = False
+    for pol in t.find_resources("AWS::IAM::Policy").values():
+        for stmt in pol["Properties"]["PolicyDocument"]["Statement"]:
+            actions = stmt.get("Action")
+            acts = actions if isinstance(actions, list) else [actions]
+            resource = stmt.get("Resource")
+            resources = resource if isinstance(resource, list) else [resource]
+            if ("secretsmanager:GetSecretValue" in acts
+                    and any(isinstance(r, str)
+                            and r.endswith("secret:keri/rating/*")
+                            for r in resources)):
+                secret_found = True
+    assert secret_found, ("function role must grant secretsmanager:GetSecretValue "
+                          "on keri/rating/*")
 
 
 def test_service_aid_construct_rejects_unsafe_alias(tmp_path):
