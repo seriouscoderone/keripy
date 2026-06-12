@@ -227,15 +227,20 @@ class SecretKeeper:
     @contextlib.contextmanager
     def deferflush(self):
         """Suppress per-mutation flush within the block; flush once atomically
-        on exit. Use around establishment ceremonies (incept/rotate) so a crash
-        mid-ceremony leaves the prior secret intact, not a half-written keeper.
+        on CLEAN exit. On an exception, do NOT flush — leaving the prior secret
+        intact rather than persisting a half-written keeper.
 
+        Use around establishment ceremonies (incept/rotate) so a crash
+        mid-ceremony leaves the prior secret intact, not a half-written keeper.
         Re-entrant: nested deferflush blocks only flush at the outermost exit.
         """
         self._defer_depth += 1
         try:
             yield self
-        finally:
+        except BaseException:
+            self._defer_depth -= 1
+            raise                       # abort: no partial flush
+        else:
             self._defer_depth -= 1
             if self._defer_depth == 0:
                 self._flush()

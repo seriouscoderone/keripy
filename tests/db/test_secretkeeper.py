@@ -176,3 +176,37 @@ def test_secretkeeper_deferflush_single_write():
                 ks.setVal(sub, b"k5", b"v5")
             assert calls["n"] == 0          # inner exit did not flush
         assert calls["n"] == 1              # only outermost exit flushed
+
+
+@needs_moto
+def test_secretkeeper_deferflush_no_write_on_exception():
+    from moto import mock_aws
+    with mock_aws():
+        store = SecretStore(region="us-east-1")
+        ks = SecretKeeper(store=store, secret_name="keri/svc/keeper",
+                          salt="0Asalt", bran="b" * 21)
+        sub = ks.env.open_db(b"gbls.")
+
+        calls = {"n": 0}
+        orig_put = store.put
+
+        def counting_put(name, value):
+            calls["n"] += 1
+            return orig_put(name, value)
+
+        store.put = counting_put
+
+        # A ceremony that writes some entries then raises mid-block must NOT
+        # persist the partial in-memory keeper.
+        class Boom(Exception):
+            pass
+
+        with pytest.raises(Boom):
+            with ks.deferflush():
+                ks.setVal(sub, b"pres", b"prefixer")
+                ks.setVal(sub, b"prms", b"preprm")
+                raise Boom()                     # crash before pris written
+
+        assert calls["n"] == 0                   # zero writes: no partial flush
+        assert ks._defer_depth == 0              # depth restored after abort
+        assert store.get("keri/svc/keeper") is None  # nothing ever persisted
