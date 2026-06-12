@@ -123,7 +123,7 @@ class ServiceAid(Construct):
         # (steady-state runtime) and create/put (CR get-or-create).
         keeper_secret_arn = f"arn:aws:secretsmanager:*:*:secret:keri/{alias}/*"
         fn.add_to_role_policy(iam.PolicyStatement(
-            actions=["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret",
+            actions=["secretsmanager:GetSecretValue",
                      "secretsmanager:CreateSecret", "secretsmanager:PutSecretValue"],
             resources=[keeper_secret_arn]))
         # NOTE: CreateSecret/PutSecretValue are needed only by the inception CR;
