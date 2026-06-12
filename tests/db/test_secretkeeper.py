@@ -36,3 +36,23 @@ def test_secretstore_get_or_create_is_idempotent():
         created2, val2 = store.get_or_create("keri/svc/keeper", lambda: '{"v":1,"n":2}')
         assert created1 is True and val1 == '{"v":1,"n":1}'
         assert created2 is False and val2 == '{"v":1,"n":1}'   # existing wins
+
+
+@needs_moto
+def test_get_or_create_never_overwrites_existing():
+    with mock_aws():
+        store = SecretStore(region="us-east-1")
+        store.put("keri/svc/keeper", '{"v":1,"n":1}')          # pre-existing
+        created, val = store.get_or_create("keri/svc/keeper",
+                                            lambda: '{"v":1,"n":2}')
+        assert created is False and val == '{"v":1,"n":1}'     # existing wins
+        assert store.get("keri/svc/keeper") == '{"v":1,"n":1}'  # unchanged on disk
+
+
+@needs_moto
+def test_put_updates_existing():
+    with mock_aws():
+        store = SecretStore(region="us-east-1")
+        store.put("keri/svc/keeper", '{"v":1,"n":1}')
+        store.put("keri/svc/keeper", '{"v":1,"n":2}')          # deliberate overwrite
+        assert store.get("keri/svc/keeper") == '{"v":1,"n":2}'  # second value wins

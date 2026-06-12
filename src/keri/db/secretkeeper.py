@@ -43,7 +43,8 @@ class SecretStore:
                 return None
 
     def put(self, name: str, value: str) -> None:
-        """Create-or-update the secret value."""
+        """Create-or-update the secret value (overwrites); do NOT use for
+        get-or-create — use _create_only."""
         if self.kind == "secretsmanager":
             try:
                 self._c.put_secret_value(SecretId=name, SecretString=value)
@@ -53,12 +54,30 @@ class SecretStore:
             self._c.put_parameter(Name=name, Value=value, Type="SecureString",
                                   Overwrite=True)
 
+    def _create_only(self, name: str, value: str) -> bool:
+        """Create the secret only if absent; never overwrite. True if created."""
+        if self.kind == "secretsmanager":
+            try:
+                self._c.create_secret(Name=name, SecretString=value)
+                return True
+            except self._c.exceptions.ResourceExistsException:
+                return False
+        else:  # ssm
+            try:
+                self._c.put_parameter(Name=name, Value=value,
+                                      Type="SecureString", Overwrite=False)
+                return True
+            except self._c.exceptions.ParameterAlreadyExists:
+                return False
+
     def get_or_create(self, name: str, mint) -> tuple[bool, str]:
-        """Return (created, value). If absent, store mint() and return it; else
-        return the existing value (existing always wins — never overwrites)."""
+        """Return (created, value). If absent, create (atomically, never
+        overwriting); else return existing. Race-safe: a caller that loses the
+        create race re-reads the winner's value."""
         existing = self.get(name)
         if existing is not None:
             return False, existing
         value = mint()
-        self.put(name, value)
-        return True, value
+        if self._create_only(name, value):
+            return True, value
+        return False, self.get(name)   # lost the race — winner's value wins
