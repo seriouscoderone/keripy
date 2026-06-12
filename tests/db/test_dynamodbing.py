@@ -230,6 +230,19 @@ class TestOrdinalOps:
         with pytest.raises(ValueError):
             dber.appendOnVal(sdb, b"pre", val=None)
 
+    def test_appendOnVal_retries_past_taken_ordinals(self, dber):
+        """Under a stale GSI (concurrent-writer race), appendOnVal lands at the first
+        genuinely-free ordinal via conditional-put retry, not raise/overwrite."""
+        sdb = dber.env.open_db(b"test.")
+        assert dber.appendOnVal(sdb, b"pre", val=b"evt0") == 0
+        assert dber.appendOnVal(sdb, b"pre", val=b"evt1") == 1
+        dber._query_gsi = lambda *a, **k: []   # simulate GSI lag: max-query reports empty
+        on = dber.appendOnVal(sdb, b"pre", val=b"evt2")
+        assert on == 2
+        assert dber.getOnVal(sdb, b"pre", on=0) == b"evt0"
+        assert dber.getOnVal(sdb, b"pre", on=1) == b"evt1"
+        assert dber.getOnVal(sdb, b"pre", on=2) == b"evt2"
+
     def test_getOnItem(self, dber):
         sdb = dber.env.open_db(b"test.")
         dber.putOnVal(sdb, b"pre", on=5, val=b"evt5")

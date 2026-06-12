@@ -127,6 +127,9 @@ _GSI_NAME = "subdb-index"
 _GSI_PK = "gsi_pk"   # subdb name only
 _GSI_SK = "gsi_sk"   # hex(full_original_key)
 
+_APPEND_MAX_RETRY = 64   # ordinal-collision retry ceiling; exceeding it signals a real
+                         # anomaly (hot-key storm / bug), not normal contention
+
 
 @dataclass
 class DynamoSubDb:
@@ -690,9 +693,20 @@ class DynamoDBer:
             except (ValueError, IndexError):
                 on = 0
 
-        if not self.putVal(db=db, key=onKey(key, on, sep=sep), val=val):
-            raise ValueError(f"Failed appending {val=} at {key=}.")
-        return on
+        # `on` is the starting estimate from the (eventually-consistent) GSI max. Land at
+        # the first genuinely-free ordinal via strongly-consistent conditional puts,
+        # advancing locally on collision — robust to GSI staleness and concurrent writers
+        # (no append dropped or overwritten; arrival-order best-effort).
+        for _ in range(_APPEND_MAX_RETRY):
+            if on >= MaxON:
+                raise ValueError(
+                    f"Number part {on=} for key part {key=} exceeds maximum size.")
+            if self.putVal(db=db, key=onKey(key, on, sep=sep), val=val):
+                return on
+            on += 1
+        raise ValueError(
+            f"Failed appending {val=} at {key=} after {_APPEND_MAX_RETRY} attempts "
+            "(excessive contention).")
 
     def getOnItem(self, db: DynamoSubDb, key: bytes, on: int = 0,
                   *, sep: bytes = b".") -> tuple[bytes, int, bytes] | None:
