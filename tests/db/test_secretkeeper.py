@@ -10,7 +10,7 @@ except ImportError:
 
 needs_moto = pytest.mark.skipif(not HAS_MOTO, reason="requires moto")
 
-from keri.db.secretkeeper import SecretStore, dumpKeeper, loadKeeper
+from keri.db.secretkeeper import SecretStore, SecretKeeper, dumpKeeper, loadKeeper
 
 
 @needs_moto
@@ -73,3 +73,46 @@ def test_keeper_blob_empty():
 def test_keeper_blob_none_loads_empty():
     assert loadKeeper(None) == {}
     assert loadKeeper("") == {}
+
+
+@needs_moto
+def test_secretkeeper_kv_roundtrip_and_persist():
+    from moto import mock_aws
+    with mock_aws():
+        store = SecretStore(region="us-east-1")
+        ks = SecretKeeper(store=store, secret_name="keri/svc/keeper",
+                          salt="0Asalt", bran="b" * 21)
+        sub = ks.env.open_db(b"gbls.")
+        assert ks.setVal(sub, b"aeid", b"Dpubkey") is True
+        assert ks.getVal(sub, b"aeid") == b"Dpubkey"
+        assert ks.putVal(sub, b"aeid", b"other") is False    # no overwrite
+        import json
+        doc = json.loads(store.get("keri/svc/keeper"))
+        assert doc["salt"] == "0Asalt" and doc["bran"] == "b" * 21
+
+        ks2 = SecretKeeper.open(store=store, secret_name="keri/svc/keeper")
+        sub2 = ks2.env.open_db(b"gbls.")
+        assert ks2.getVal(sub2, b"aeid") == b"Dpubkey"
+        assert ks2.salt == "0Asalt" and ks2.bran == "b" * 21
+
+
+@needs_moto
+def test_secretkeeper_top_iter_and_rem():
+    from moto import mock_aws
+    with mock_aws():
+        store = SecretStore(region="us-east-1")
+        ks = SecretKeeper(store=store, secret_name="keri/svc/keeper",
+                          salt="0Asalt", bran="b" * 21)
+        sub = ks.env.open_db(b"pris.")
+        ks.setVal(sub, b"k1", b"v1")
+        ks.setVal(sub, b"k2", b"v2")
+        assert dict(ks.getTopItemIter(sub)) == {b"k1": b"v1", b"k2": b"v2"}
+        assert ks.remVal(sub, b"k1") is True
+        assert ks.getVal(sub, b"k1") is None
+
+
+def test_secretkeeper_unsupported_method_raises():
+    ks = SecretKeeper(store=None, secret_name="x", salt=None, bran=None,
+                      no_store=True)
+    with pytest.raises(NotImplementedError):
+        ks.getIoSetItemIter(None, b"k")
