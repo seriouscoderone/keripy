@@ -166,7 +166,7 @@ def create_role(iam, role_name, account, table_arn, alias):
     }
     iam.create_role(RoleName=role_name,
                     AssumeRolePolicyDocument=json.dumps(trust),
-                    Description="LeadingKeys probe — throwaway, safe to delete")
+                    Description="LeadingKeys probe - throwaway, safe to delete")
     iam.put_role_policy(RoleName=role_name, PolicyName="leadingkeys",
                         PolicyDocument=json.dumps(leading_keys_policy(table_arn, alias)))
     print(f"  created role {role_name} (alias={alias})")
