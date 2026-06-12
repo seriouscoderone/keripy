@@ -22,6 +22,11 @@ class Config:
     required_schema: str = ""
     region: str = "us-east-1"
     endpoint_url: str | None = None
+    # Separate endpoint for the keeper secret store (Secrets Manager). In
+    # production both endpoints are None (real AWS). This knob exists only so
+    # local dev can point DynamoDB at DynamoDB-Local (`endpoint_url`) while the
+    # keeper SecretStore still reaches real AWS / an in-process moto mock.
+    secret_endpoint_url: str | None = None
 
     @property
     def kel_namespace(self) -> str:
@@ -50,4 +55,5 @@ class Config:
             required_schema=os.environ.get("SERVICEAID_REQUIRED_SCHEMA", ""),
             region=os.environ.get("SERVICEAID_REGION", "us-east-1"),
             endpoint_url=os.environ.get("SERVICEAID_ENDPOINT_URL") or None,
+            secret_endpoint_url=os.environ.get("SERVICEAID_SECRET_ENDPOINT_URL") or None,
         )

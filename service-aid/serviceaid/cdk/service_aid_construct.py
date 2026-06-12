@@ -23,7 +23,16 @@ from constructs import Construct
 
 class ServiceAid(Construct):
     """One Service AID: container Lambda over the shared core table (own namespace)
-    + an isolated, encrypted keeper table + bran secret + inception Custom Resource.
+    + a keeper secret + inception Custom Resource.
+
+    TODO(Task 6 / secret-keeper): this construct still provisions the LEGACY
+    ``{alias}-ks`` DynamoDB keeper table + auto-minted ``{alias}/bran`` secret
+    and sets ``SERVICEAID_KEEPER_TABLE`` / ``SERVICEAID_BRAN_SECRET`` — env vars
+    the runtime NO LONGER reads (it now loads a single ``keri/<alias>/keeper``
+    Secrets Manager secret holding {salt, bran, keeper-blob}). ``cdk deploy``
+    from this commit therefore produces a NON-FUNCTIONAL stack until Task 6
+    replaces this construct (drop the -ks table + bran secret, provision the
+    keeper secret via get-or-create, set ``SERVICEAID_KEEPER_SECRET``).
 
     The pooled core table is referenced by name only (``core_table_name``).
     IAM access is scoped to this service's namespace prefixes via
@@ -76,6 +85,15 @@ class ServiceAid(Construct):
         **kw,
     ):
         super().__init__(scope, cid, **kw)
+        # ╔══════════════════════════════════════════════════════════════════╗
+        # ║ TODO(Task 6 / secret-keeper): STALE — produces a NON-FUNCTIONAL    ║
+        # ║ stack. The keeper resources below ({alias}-ks DynamoDB table +     ║
+        # ║ auto-minted {alias}/bran secret) and the SERVICEAID_KEEPER_TABLE / ║
+        # ║ SERVICEAID_BRAN_SECRET env vars are NO LONGER read by the runtime, ║
+        # ║ which now loads a single keri/<alias>/keeper Secrets Manager       ║
+        # ║ secret. Task 6 replaces this with keeper-secret provisioning +     ║
+        # ║ SERVICEAID_KEEPER_SECRET. Do NOT `cdk deploy` this commit.         ║
+        # ╚══════════════════════════════════════════════════════════════════╝
         if not re.fullmatch(r"[a-z0-9-]+", alias):
             raise ValueError(f"alias must match [a-z0-9-]+ (got {alias!r}) — "
                              "it is interpolated into IAM LeadingKeys patterns")

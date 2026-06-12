@@ -130,7 +130,7 @@ def init(cfg: Config | None = None) -> RuntimeState:
     # Keeper: one KMS-encrypted secret per stack (NOT a pooled DynamoDB table).
     # The keeper's salt/bran live IN the secret (provisioned by the inception
     # Custom Resource); a fresh cold start reloads the keystore from it.
-    store = SecretStore(region=cfg.region, endpoint_url=cfg.endpoint_url)
+    store = SecretStore(region=cfg.region, endpoint_url=cfg.secret_endpoint_url)
     ks = SecretKeeper.open(store=store, secret_name=cfg.keeper_secret)
     setup_keeper(ks)
     if not ks.bran:

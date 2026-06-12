@@ -45,6 +45,21 @@ def test_keeper_secret_defaults_from_alias(monkeypatch):
     assert cfg.keeper_secret == "keri/rating/keeper"
 
 
+def test_secret_endpoint_url_defaults_none_and_reads_env(monkeypatch):
+    """secret_endpoint_url is None in production (real AWS) and only set for
+    local dev to split the keeper SecretStore off the DynamoDB endpoint."""
+    monkeypatch.setenv("SERVICEAID_ALIAS", "rating")
+    monkeypatch.setenv("SERVICEAID_CORE_TABLE", "keri-core")
+    monkeypatch.setenv("SERVICEAID_WITNESSES", "")
+    monkeypatch.setenv("SERVICEAID_HANDLER", "")
+    # Default: unset => None (production: both endpoints None).
+    monkeypatch.delenv("SERVICEAID_SECRET_ENDPOINT_URL", raising=False)
+    assert Config.from_env().secret_endpoint_url is None
+    # Reads the dedicated env var when present.
+    monkeypatch.setenv("SERVICEAID_SECRET_ENDPOINT_URL", "https://sm.example")
+    assert Config.from_env().secret_endpoint_url == "https://sm.example"
+
+
 def test_config_toad_defaults_to_witness_count(monkeypatch):
     for k in ("SERVICEAID_TOAD",):
         monkeypatch.delenv(k, raising=False)

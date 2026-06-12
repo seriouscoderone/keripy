@@ -63,8 +63,12 @@ High-rate KEL/TEL append serialization is v2 (see spec §14).
 - **Required-credential authz is deferred:** `Policy.required_schema` exists but
   the handler does not yet extract caller-presented ACDCs (`credentials=[]`), so
   setting it denies all requests. Use the allowlist for v1 sender gating.
-- **Run without a bran = plaintext keeper keys.** The runtime logs a warning;
-  set `SERVICEAID_BRAN_SECRET` to a Secrets Manager secret for production.
+- **Keeper lives in one secret.** The runtime loads a single KMS-encrypted
+  Secrets Manager secret (`keri/<alias>/keeper`, override with
+  `SERVICEAID_KEEPER_SECRET`) holding `{salt, bran, keeper-blob}`; the bran in
+  that secret drives at-rest encryption (aeid). The inception Custom Resource
+  provisions it with a fresh salt+bran, so production has no plaintext-keeper
+  fallback by design (a secret with an empty bran logs a warning).
 - **`cdk destroy` orphans the pooled table.** KeriCoreStack's table and each
   service's keeper table use RemovalPolicy.RETAIN (intentional — losing them
   loses identities). After a destroy, the orphaned table blocks redeploy with
