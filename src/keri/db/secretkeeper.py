@@ -9,6 +9,7 @@ keeper — keripy's Keeper/Manager/aeid surface is unchanged.
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import zlib
 
@@ -189,6 +190,7 @@ class SecretKeeper:
         self.salt = salt
         self.bran = bran
         self._no_store = no_store
+        self._defer_depth = 0
         self._data = loadKeeper(keeper_blob)
         self._subdbs = {n: SecretSubDb(n) for n in self._data}
         self.env = SecretEnv(self)
@@ -210,18 +212,40 @@ class SecretKeeper:
     # ---- Persistence ----
 
     def _flush(self):
-        """Serialize the whole keeper + salt/bran and overwrite the secret."""
-        if self._no_store or self.store is None:
+        """Serialize the whole keeper + salt/bran and overwrite the secret.
+
+        No-op while a deferflush block is active (._defer_depth > 0): the
+        block flushes once atomically on its outermost exit.
+        """
+        if self._no_store or self.store is None or self._defer_depth > 0:
             return
         doc = {"v": 1, "salt": self.salt, "bran": self.bran,
                "keeper": dumpKeeper(self._data)}
         self.store.put(self.secret_name,
                        json.dumps(doc, separators=(",", ":")))
 
+    @contextlib.contextmanager
+    def deferflush(self):
+        """Suppress per-mutation flush within the block; flush once atomically
+        on exit. Use around establishment ceremonies (incept/rotate) so a crash
+        mid-ceremony leaves the prior secret intact, not a half-written keeper.
+
+        Re-entrant: nested deferflush blocks only flush at the outermost exit.
+        """
+        self._defer_depth += 1
+        try:
+            yield self
+        finally:
+            self._defer_depth -= 1
+            if self._defer_depth == 0:
+                self._flush()
+
     # ---- Single-value CRUD (the keeper's real surface) ----
 
     def putVal(self, db, key, val) -> bool:
         """Insert val at key without overwriting. True if inserted, else False."""
+        if not key:
+            raise KeyError(f"Key: `{key}` is empty, too big, or wrong DUPFIXED size.")
         items = self._data.setdefault(db.name, {})
         hk = _hexk(key)
         if hk in items:
@@ -232,12 +256,16 @@ class SecretKeeper:
 
     def setVal(self, db, key, val) -> bool:
         """Insert or overwrite val at key. Always True."""
+        if not key:
+            raise KeyError(f"Key: `{key}` is empty, too big, or wrong DUPFIXED size.")
         self._data.setdefault(db.name, {})[_hexk(key)] = bytes(val)
         self._flush()
         return True
 
     def getVal(self, db, key):
         """Return stored bytes at key, or None when missing."""
+        if not key:
+            raise KeyError(f"Key: `{key}` is empty, too big, or wrong DUPFIXED size.")
         val = self._data.get(db.name, {}).get(_hexk(key))
         return bytes(val) if val is not None else None
 

@@ -116,3 +116,63 @@ def test_secretkeeper_unsupported_method_raises():
                       no_store=True)
     with pytest.raises(NotImplementedError):
         ks.getIoSetItemIter(None, b"k")
+
+
+@needs_moto
+def test_secretkeeper_empty_key_raises():
+    from moto import mock_aws
+    with mock_aws():
+        store = SecretStore(region="us-east-1")
+        ks = SecretKeeper(store=store, secret_name="keri/svc/keeper",
+                          salt="0Asalt", bran="b" * 21)
+        sub = ks.env.open_db(b"gbls.")
+        with pytest.raises(KeyError):
+            ks.setVal(sub, b"", b"v")
+        with pytest.raises(KeyError):
+            ks.getVal(sub, b"")
+        with pytest.raises(KeyError):
+            ks.putVal(sub, b"", b"v")
+
+
+@needs_moto
+def test_secretkeeper_deferflush_single_write():
+    from moto import mock_aws
+    with mock_aws():
+        store = SecretStore(region="us-east-1")
+        ks = SecretKeeper(store=store, secret_name="keri/svc/keeper",
+                          salt="0Asalt", bran="b" * 21)
+        sub = ks.env.open_db(b"gbls.")
+
+        calls = {"n": 0}
+        orig_put = store.put
+
+        def counting_put(name, value):
+            calls["n"] += 1
+            return orig_put(name, value)
+
+        store.put = counting_put
+
+        # Several mutations inside one deferflush block => exactly one write.
+        with ks.deferflush():
+            ks.setVal(sub, b"k1", b"v1")
+            ks.setVal(sub, b"k2", b"v2")
+            ks.setVal(sub, b"k3", b"v3")
+            assert calls["n"] == 0          # nothing written mid-ceremony
+        assert calls["n"] == 1              # one atomic flush on exit
+
+        # Secret reflects all values after the block.
+        import json
+        doc = json.loads(store.get("keri/svc/keeper"))
+        data = loadKeeper(doc["keeper"])
+        assert data["gbls."] == {b"k1".hex(): b"v1",
+                                 b"k2".hex(): b"v2",
+                                 b"k3".hex(): b"v3"}
+
+        # Nested deferflush flushes only at the outermost exit.
+        calls["n"] = 0
+        with ks.deferflush():
+            ks.setVal(sub, b"k4", b"v4")
+            with ks.deferflush():
+                ks.setVal(sub, b"k5", b"v5")
+            assert calls["n"] == 0          # inner exit did not flush
+        assert calls["n"] == 1              # only outermost exit flushed
