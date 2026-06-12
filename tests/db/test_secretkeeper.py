@@ -210,3 +210,63 @@ def test_secretkeeper_deferflush_no_write_on_exception():
         assert calls["n"] == 0                   # zero writes: no partial flush
         assert ks._defer_depth == 0              # depth restored after abort
         assert store.get("keri/svc/keeper") is None  # nothing ever persisted
+
+
+@needs_moto
+def test_habery_incepts_and_signs_over_secretkeeper():
+    """Keystone: a real Habery incepts an AID with ks=SecretKeeper, the keeper
+    persists to a (moto) Secrets Manager secret, a fresh cold start reloads it,
+    and signing produces a verifiable signature.
+
+    The private key material lives ONLY in the secret-backed keeper. The
+    cold-start Habery is given a genuinely fresh ``SecretKeeper`` reloaded from
+    the secret; the public-side KEL (Baser) is the only thing shared across the
+    cold start, mirroring production where the public DB is durable and the
+    keeper round-trips through the KMS-encrypted secret. ``hab3.sign`` therefore
+    can only succeed if the private keys survived the secret round-trip, and the
+    verify proves they are the right keys for the reloaded public KEL.
+    """
+    from moto import mock_aws
+    from keri.app.habbing import Habery
+    from keri.app.lambding import setup_keeper
+    from keri.core.signing import Salter
+    from keri.db.basing import Baser
+    import json
+    with mock_aws():
+        store = SecretStore(region="us-east-1")
+        salt = Salter(raw=b'0123456789abcdef').qb64
+        bran = "b" * 21
+        # provision the keeper secret (as the inception CR will, Task 6)
+        store.put("keri/svc/keeper", json.dumps(
+            {"v": 1, "salt": salt, "bran": bran, "keeper": None}))
+
+        # Durable public-side DB shared across the cold start (private keys are
+        # NOT stored here — they live only in the secret-backed keeper).
+        db = Baser(name="svc", temp=True, reopen=True)
+
+        ks = SecretKeeper.open(store=store, secret_name="keri/svc/keeper")
+        setup_keeper(ks)
+        hby = Habery(name="svc", temp=True, ks=ks, db=db, salt=salt, bran=bran)
+        with ks.deferflush():                       # single atomic keeper write
+            hab = hby.makeHab(name="svc", transferable=True)
+        pre = hab.pre
+        assert ks.bran == bran
+
+        # keeper persisted to the secret: a fresh SecretKeeper over the same
+        # secret carries the private key material
+        ks2 = SecretKeeper.open(store=store, secret_name="keri/svc/keeper")
+        assert ks2.cntAll(ks2.env.open_db(b"pris.")) >= 1   # LOAD-BEARING
+
+        # release the first keeper only; keep the public DB open for cold start
+        ks.close()
+
+        # cold start over the persisted keeper: a genuinely fresh SecretKeeper
+        # reloaded from the secret supplies the private keys for signing.
+        ks3 = SecretKeeper.open(store=store, secret_name="keri/svc/keeper")
+        setup_keeper(ks3)
+        hby3 = Habery(name="svc", temp=True, ks=ks3, db=db, salt=salt, bran=bran)
+        hab3 = hby3.habByName("svc")
+        assert hab3 is not None and hab3.pre == pre   # public KEL reloaded
+        sigs = hab3.sign(b"hello world")              # keys from reloaded keeper
+        assert sigs and hab3.kever.verfers[0].verify(sigs[0].raw, b"hello world")
+        hby3.close(clear=True)
