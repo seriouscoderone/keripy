@@ -7,7 +7,8 @@ populate the `service` singleton.  The resulting `RuntimeState` is cached
 module-level so warm Lambda invocations skip all of this.
 
 `init()` must be called from the Lambda handler, never at module import time
-(SnapStart safety: the bran is fetched from Secrets Manager inside `init`).
+(SnapStart safety: the keeper secret -- salt, bran, and keystore -- is fetched
+from Secrets Manager inside `init`).
 
 Witnessed-deployment note: the AID is incepted with `wits`/`toad` from config
 (production AIDs are witnessed at the KEL layer), but TEL issuance via
@@ -23,13 +24,14 @@ import logging
 from dataclasses import dataclass
 
 from keri.db.dynamodbing import DynamoDBer
-from keri.app.lambding import (BASER_STORES, KEEPER_STORES, REGER_STORES,
+from keri.db.secretkeeper import SecretStore, SecretKeeper
+from keri.app.lambding import (BASER_STORES, REGER_STORES,
                                setup_baser, setup_keeper, setup_reger)
 from keri.app.habbing import Habery
 from keri.app.configing import Configer
 from keri.vdr import credentialing
 
-from .config import Config, load_bran
+from .config import Config
 from .contract import service, Service
 from .authorize import Policy
 from .issuing import ensure_registry
@@ -56,7 +58,8 @@ def reset():
     global _state
     if _state is not None:
         try:
-            # Habery.close closes the injected ks and db DynamoDBers + cf.
+            # Habery.close closes the injected ks (SecretKeeper) and db
+            # DynamoDBer + cf.
             _state.hby.close()
         except Exception:
             logger.exception("error closing Habery during reset")
@@ -124,21 +127,19 @@ def init(cfg: Config | None = None) -> RuntimeState:
                             namespace=cfg.tel_namespace, **kwa)
     setup_reger(reger)
 
-    # Keeper: isolated table, encrypted via bran (aeid). Never pooled.
-    ks = DynamoDBer.open(name=f"{cfg.alias}-ks", stores=KEEPER_STORES,
-                         table_name=cfg.keeper_table, **kwa)
+    # Keeper: one KMS-encrypted secret per stack (NOT a pooled DynamoDB table).
+    # The keeper's salt/bran live IN the secret (provisioned by the inception
+    # Custom Resource); a fresh cold start reloads the keystore from it.
+    store = SecretStore(region=cfg.region, endpoint_url=cfg.endpoint_url)
+    ks = SecretKeeper.open(store=store, secret_name=cfg.keeper_secret)
     setup_keeper(ks)
-
-    if cfg.bran_secret:
-        bran = load_bran(cfg.bran_secret, region=cfg.region)
-    else:
-        bran = None
-        logger.warning("SERVICEAID_BRAN_SECRET not set — keeper keys will be "
-                       "stored UNENCRYPTED in %s", cfg.keeper_table)
+    if not ks.bran:
+        logger.warning("keeper secret %s has no bran — keeper will be "
+                       "UNENCRYPTED", cfg.keeper_secret)
 
     cf = Configer(name=cfg.alias, temp=True)  # Lambda: filesystem only in /tmp
     hby = Habery(name=cfg.alias, temp=False, free=True, db=db, ks=ks, cf=cf,
-                 bran=bran)
+                 salt=ks.salt, bran=ks.bran)
 
     hab = hby.habByName(cfg.alias)
     if hab is None:
@@ -152,9 +153,10 @@ def init(cfg: Config | None = None) -> RuntimeState:
         # this lazy-create path is not race-safe — two racing cold starts
         # would mint two AIDs with last-write-wins on the alias mapping; the
         # Task 11 inception Custom Resource contract applies here too.
-        hab = hby.makeHab(name=cfg.alias, transferable=True,
-                          wits=cfg.witnesses, toad=cfg.toad,
-                          isith="1", icount=1, nsith="1", ncount=1)
+        with ks.deferflush():            # single atomic keeper write on incept
+            hab = hby.makeHab(name=cfg.alias, transferable=True,
+                              wits=cfg.witnesses, toad=cfg.toad,
+                              isith="1", icount=1, nsith="1", ncount=1)
     # Hab.make adds the prefix on first creation, but the lambding setup_baser
     # does not repopulate db.prefixes from stored state on later cold starts.
     hby.prefixes.add(hab.pre)

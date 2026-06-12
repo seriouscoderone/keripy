@@ -20,18 +20,28 @@ _OPTIONAL_VARS = (
 )
 
 
+def _provision_keeper_secret(name="keri/rating/keeper", bran="q" * 21):
+    """Create the keeper secret the inception CR (Task 6) will provision: one
+    secret holding {salt, bran, keeper-blob}."""
+    import boto3, json
+    from keri.core.signing import Salter
+    boto3.client("secretsmanager", region_name="us-east-1").create_secret(
+        Name=name,
+        SecretString=json.dumps({"v": 1,
+                                 "salt": Salter(raw=b'0123456789abcdef').qb64,
+                                 "bran": bran, "keeper": None}))
+
+
 @needs_moto
 def test_on_create_incepts_and_returns_pre(monkeypatch):
-    import boto3
     from serviceaid import runtime
     from serviceaid.cdk import inception
     with mock_aws():
-        sm = boto3.client("secretsmanager", region_name="us-east-1")
-        sm.create_secret(Name="rating/bran", SecretString="q" * 21)
+        _provision_keeper_secret()
         runtime.reset()
         env = {"SERVICEAID_ALIAS": "rating", "SERVICEAID_CORE_TABLE": "keri-core",
-               "SERVICEAID_KEEPER_TABLE": "rating-ks", "SERVICEAID_WITNESSES": "",
-               "SERVICEAID_HANDLER": "", "SERVICEAID_BRAN_SECRET": "rating/bran"}
+               "SERVICEAID_KEEPER_SECRET": "keri/rating/keeper",
+               "SERVICEAID_WITNESSES": "", "SERVICEAID_HANDLER": ""}
         for k, v in env.items():
             monkeypatch.setenv(k, v)
         for var in _OPTIONAL_VARS:
@@ -45,16 +55,14 @@ def test_on_create_incepts_and_returns_pre(monkeypatch):
 
 @needs_moto
 def test_on_update_is_idempotent(monkeypatch):
-    import boto3
     from serviceaid import runtime
     from serviceaid.cdk import inception
     with mock_aws():
-        sm = boto3.client("secretsmanager", region_name="us-east-1")
-        sm.create_secret(Name="rating/bran", SecretString="q" * 21)
+        _provision_keeper_secret()
         runtime.reset()
         env = {"SERVICEAID_ALIAS": "rating", "SERVICEAID_CORE_TABLE": "keri-core",
-               "SERVICEAID_KEEPER_TABLE": "rating-ks", "SERVICEAID_WITNESSES": "",
-               "SERVICEAID_HANDLER": "", "SERVICEAID_BRAN_SECRET": "rating/bran"}
+               "SERVICEAID_KEEPER_SECRET": "keri/rating/keeper",
+               "SERVICEAID_WITNESSES": "", "SERVICEAID_HANDLER": ""}
         for k, v in env.items():
             monkeypatch.setenv(k, v)
         for var in _OPTIONAL_VARS:

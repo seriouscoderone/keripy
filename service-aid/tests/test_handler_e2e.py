@@ -33,11 +33,24 @@ needs_moto = pytest.mark.skipif(not HAS_MOTO, reason="requires moto")
 
 
 def _cfg(**o):
-    b = dict(alias="rating", core_table="keri-core", keeper_table="rating-ks",
-             witnesses=[], toad=0, handler_module="", bran_secret="rating/bran",
+    b = dict(alias="rating", core_table="keri-core",
+             keeper_secret="keri/rating/keeper",
+             witnesses=[], toad=0, handler_module="",
              region="us-east-1", endpoint_url=None)
     b.update(o)
     return Config(**b)
+
+
+def _provision_keeper_secret(name="keri/rating/keeper", bran="z" * 21):
+    """Create the keeper secret (one secret holding {salt, bran, keeper-blob})
+    that the inception CR (Task 6) provisions for a stack."""
+    import boto3, json
+    from keri.core.signing import Salter
+    boto3.client("secretsmanager", region_name="us-east-1").create_secret(
+        Name=name,
+        SecretString=json.dumps({"v": 1,
+                                 "salt": Salter(raw=b'0123456789abcdef').qb64,
+                                 "bran": bran, "keeper": None}))
 
 
 def _caller_request(route: str, attributes: dict) -> tuple[Habery, object, dict]:
@@ -63,13 +76,11 @@ def _caller_request(route: str, attributes: dict) -> tuple[Habery, object, dict]
 
 
 def _init_rating_service(score=None):
-    """Moto-side service setup: bran secret + /rate/apply command + schema.
+    """Moto-side service setup: keeper secret + /rate/apply command + schema.
 
     Must run inside an active mock_aws() context. Returns the RuntimeState.
     """
-    import boto3
-    sm = boto3.client("secretsmanager", region_name="us-east-1")
-    sm.create_secret(Name="rating/bran", SecretString="z" * 21)
+    _provision_keeper_secret()
 
     runtime.reset()
     service._commands.clear()
@@ -88,10 +99,8 @@ def _init_rating_service(score=None):
 
 @needs_moto
 def test_full_request_returns_verifiable_grant(monkeypatch):
-    import boto3
     with mock_aws():
-        sm = boto3.client("secretsmanager", region_name="us-east-1")
-        sm.create_secret(Name="rating/bran", SecretString="z" * 21)
+        _provision_keeper_secret()
 
         # Register a command + the schema BEFORE init (handler_module="" => inline).
         runtime.reset()
@@ -152,10 +161,8 @@ def test_full_request_returns_verifiable_grant(monkeypatch):
 
 @needs_moto
 def test_duplicate_message_is_idempotent(monkeypatch):
-    import boto3
     with mock_aws():
-        sm = boto3.client("secretsmanager", region_name="us-east-1")
-        sm.create_secret(Name="rating/bran", SecretString="z" * 21)
+        _provision_keeper_secret()
         runtime.reset()
         service._commands.clear()
         service.schemas.clear()

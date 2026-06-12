@@ -2,7 +2,10 @@
 
 Skipped unless SERVICEAID_ENDPOINT_URL is set to a live DynamoDB Local URL.
 This exercises the full pipeline (init → request → 200 grant) against a REAL
-DynamoDB table rather than moto, with no Secrets Manager (bran_secret="").
+DynamoDB table rather than moto. The keeper now lives in a single secret
+(`keri/rating/keeper`); since DynamoDB Local does not serve Secrets Manager,
+this test points the keeper SecretStore at moto-in-process while using the
+real DynamoDB endpoint for the public DB + registry.
 
 Run:
     docker run -p 8000:8000 amazon/dynamodb-local
@@ -30,29 +33,35 @@ def test_request_against_dynamodb_local(monkeypatch):
         SERVICEAID_ENDPOINT_URL=http://localhost:8000 \\
           .venv/bin/python -m pytest service-aid/tests/test_integration_local.py -v
     """
+    import json
     from keri.app.habbing import Habery
     from keri.core.signing import Salter
     from keri.core import scheming
     from keri.kering import Kinds
     from keri.peer import exchanging
+    from keri.db.secretkeeper import SecretStore
     from serviceaid import runtime, handler as H
     from serviceaid.config import Config
     from serviceaid.contract import service, Reply
     from _schema import RATING_SCHEMA_SAD
 
-    # No Secrets Manager here: run without a bran (plaintext keeper) for the
-    # local smoke test; encryption is exercised in the moto suite.
     cfg = Config(
         alias="rating",
         core_table="keri-core-local",
-        keeper_table="rating-ks-local",
+        keeper_secret="keri/rating/keeper",
         witnesses=[],
         toad=0,
         handler_module="",
-        bran_secret="",
         region="us-east-1",
         endpoint_url=ENDPOINT,
     )
+    # Provision the keeper secret (one secret holding {salt, bran, keeper-blob})
+    # the same way the inception CR will in production. DynamoDB Local does not
+    # serve Secrets Manager, so the keeper store hits the same endpoint here.
+    SecretStore(region=cfg.region, endpoint_url=cfg.endpoint_url).put(
+        cfg.keeper_secret,
+        json.dumps({"v": 1, "salt": Salter(raw=b'0123456789abcdef').qb64,
+                    "bran": "x" * 21, "keeper": None}))
     runtime.reset()
     service._commands.clear()
     service.schemas.clear()
