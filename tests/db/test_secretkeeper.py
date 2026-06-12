@@ -10,7 +10,7 @@ except ImportError:
 
 needs_moto = pytest.mark.skipif(not HAS_MOTO, reason="requires moto")
 
-from keri.db.secretkeeper import SecretStore
+from keri.db.secretkeeper import SecretStore, dumpKeeper, loadKeeper
 
 
 @needs_moto
@@ -56,9 +56,6 @@ def test_put_updates_existing():
         store.put("keri/svc/keeper", '{"v":1,"n":1}')
         store.put("keri/svc/keeper", '{"v":1,"n":2}')          # deliberate overwrite
         assert store.get("keri/svc/keeper") == '{"v":1,"n":2}'  # second value wins
-
-
-from keri.db.secretkeeper import dumpKeeper, loadKeeper
 
 
 def test_keeper_blob_roundtrip_bytes_values():
