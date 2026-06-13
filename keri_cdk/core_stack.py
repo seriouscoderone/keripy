@@ -12,6 +12,7 @@ class KeriCoreStack(Stack):
     """Pooled Tier-1 KERI-state table (KEL/Baser + TEL/Reger), namespaced per service."""
 
     def __init__(self, scope: Construct, cid: str, *, table_name: str = "keri-core", **kw):
+        kw.setdefault("termination_protection", True)
         super().__init__(scope, cid, **kw)
 
         self.table = ddb.Table(
@@ -24,15 +25,16 @@ class KeriCoreStack(Stack):
             # outlive any stack lifecycle. After `cdk destroy`, the orphaned table
             # blocks redeploy (ResourceAlreadyExists): re-import it before redeploying.
             removal_policy=RemovalPolicy.RETAIN,
+            deletion_protection=True,
+            point_in_time_recovery_specification=ddb.PointInTimeRecoverySpecification(
+                point_in_time_recovery_enabled=True,
+            ),
         )
         self.table.add_global_secondary_index(
             index_name=GSI_NAME,
             partition_key=ddb.Attribute(name="gsi_pk", type=ddb.AttributeType.STRING),
             sort_key=ddb.Attribute(name="gsi_sk", type=ddb.AttributeType.STRING),
         )
-
-        # TODO(before production): enable point-in-time recovery and
-        # deletion_protection — this pooled table holds EVERY service's KEL/TEL.
 
         ssm.StringParameter(self, "CoreTableNameParam",
                             parameter_name=CORE_TABLE_SSM,
