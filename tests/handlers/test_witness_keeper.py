@@ -11,8 +11,6 @@ re-incepting from the preserved salt MUST reproduce the identical AID — provin
 destroy-replace safety.
 """
 import json
-import os
-import sys
 
 import pytest
 
@@ -24,14 +22,10 @@ except ImportError:
 
 needs_moto = pytest.mark.skipif(not HAS_MOTO, reason="requires moto")
 
-# witness_handler.py relocated into the keri_cdk library
-# (keri_cdk/handlers/witness/). Put that dir on sys.path so the flat
-# `import witness_handler` below still resolves. sam-witness/tests ->
-# sam-witness -> repo root, then into keri_cdk/handlers/witness.
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_WITNESS_HANDLER_DIR = os.path.join(_REPO_ROOT, "keri_cdk", "handlers", "witness")
-if _WITNESS_HANDLER_DIR not in sys.path:
-    sys.path.insert(0, _WITNESS_HANDLER_DIR)
+# witness_handler.py now lives in the keri_cdk library
+# (keri_cdk/handlers/witness/). Import it via its package path; the bound
+# `witness_handler` name keeps the rest of this module unchanged.
+from keri_cdk.handlers.witness import witness_handler
 
 REGION = "us-east-1"
 BASER_TABLE = "witness-test-db"
@@ -101,7 +95,6 @@ def _reset_singletons(witness_handler):
 
 @needs_moto
 def test_destroy_replace_reproduces_same_aid(monkeypatch):
-    import witness_handler
     with mock_aws():
         _set_env(monkeypatch)
         _create_baser_table()
@@ -139,7 +132,6 @@ def test_destroy_replace_reproduces_same_aid(monkeypatch):
 
 @needs_moto
 def test_keeper_is_encrypted(monkeypatch):
-    import witness_handler
     with mock_aws():
         _set_env(monkeypatch)
         _create_baser_table()

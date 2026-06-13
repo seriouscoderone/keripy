@@ -9,8 +9,8 @@ order-independent and can run in CI.
 
 Run with::
 
-    pytest sam-witness/test_live.py -v
-    WITNESS_URL=http://localhost:3000 pytest sam-witness/test_live.py -v
+    pytest keri_cdk/probes/witness_conformance/probe.py -v
+    WITNESS_URL=http://localhost:3000 pytest keri_cdk/probes/witness_conformance/probe.py -v
 """
 
 import base64

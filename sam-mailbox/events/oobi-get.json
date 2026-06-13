@@ -1,8 +1,0 @@
-{
-  "httpMethod": "GET",
-  "path": "/oobi",
-  "headers": {"Accept": "application/cesr"},
-  "queryStringParameters": null,
-  "body": null,
-  "isBase64Encoded": false
-}

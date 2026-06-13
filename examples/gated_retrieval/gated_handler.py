@@ -20,7 +20,7 @@ keri_cdk/service_aid.py — validated in Task 9).
 import json
 import pathlib
 
-from serviceaid import service, Request, Reply
+from keri_cdk.handlers.serviceaid.contract import service, Request, Reply
 
 # Compute the real schema SAID from the bundled schema and queue it for the
 # runtime to register into the Habery's schema store at init. This is the ACDC

@@ -9,8 +9,8 @@ and can run in CI.
 
 Run with::
 
-    pytest sam-mailbox/test_live.py -v
-    MAILBOX_URL=http://localhost:3000 pytest sam-mailbox/test_live.py -v
+    pytest keri_cdk/probes/mailbox_conformance/probe.py -v
+    MAILBOX_URL=http://localhost:3000 pytest keri_cdk/probes/mailbox_conformance/probe.py -v
 """
 
 import json

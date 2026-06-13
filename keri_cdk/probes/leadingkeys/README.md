@@ -13,7 +13,7 @@ assertions, and tears them down. It touches none of your existing KERI stacks.
 1. Creates `lk-probe-<suffix>` DynamoDB table — same schema as `KeriCoreStack.CoreTable`
    (PK/SK + `subdb-index` GSI on `gsi_pk`/`gsi_sk`).
 2. Creates two IAM roles (`...-tenanta`, `...-tenantb`), each with the **exact
-   production policy statement** from `service_aid_construct.py`:
+   production policy statement** from `keri_cdk/service_aid.py`:
    `Query/GetItem/PutItem/DeleteItem/BatchWriteItem/DescribeTable` on the table +
    `index/*`, gated by `ForAllValues:StringLike` on `dynamodb:LeadingKeys`
    = `["{alias}:*#*", "__meta__#{alias}:*"]`. (No `Scan`.)

@@ -184,7 +184,7 @@ class ServiceAid(Construct):
         # SECURITY-CRITICAL (VERIFIED): the multi-tenant boundary for the pooled
         # core table rests on dynamodb:LeadingKeys scoping GSI queries
         # (subdb-index) by the namespaced gsi_pk.  This was empirically verified
-        # against real AWS — the probe at service-aid/probes/leadingkeys/probe.py
+        # against real AWS — the probe at keri_cdk/probes/leadingkeys/probe.py
         # (see its README) created two tenant roles with the exact production
         # policy, seeded both namespaces, then confirmed from tenant A's role:
         #   - cross-tenant GSI Query (tenant B's gsi_pk)   → DENIED  ← the crux
