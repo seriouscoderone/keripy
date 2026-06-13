@@ -32,7 +32,10 @@ docker run --rm --platform linux/arm64 \
     (dnf install -y libsodium || microdnf install -y libsodium || yum install -y libsodium) >/dev/null 2>&1 || true
 
     # keripy + all pip deps into python/ (-> /opt/python on sys.path).
-    pip install --no-cache-dir . -t /work/keri_cdk/layers/keri_runtime/python
+    # uvicorn (+ h11, click) is the ASGI HTTP server run.sh launches for the
+    # mailbox Falcon app; keripy itself does not depend on it, so add it here.
+    # SSE works over h11 — no need for uvicorn[standard].
+    pip install --no-cache-dir . uvicorn -t /work/keri_cdk/layers/keri_runtime/python
 
     # Copy the libsodium shared object(s) into lib/ (-> /opt/lib).
     # Search the whole image because the package path varies by distro.
