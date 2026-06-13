@@ -1,5 +1,5 @@
-from serviceaid.authorize import Policy, authorize
-from serviceaid.contract import Request
+from keri_cdk.handlers.serviceaid.authorize import Policy, authorize
+from keri_cdk.handlers.serviceaid.contract import Request
 
 
 def _req(sender="Ecaller", creds=None):

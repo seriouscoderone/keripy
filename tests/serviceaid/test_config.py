@@ -6,7 +6,7 @@ try:
 except ImportError:
     HAS_MOTO = False
 
-from serviceaid.config import Config
+from keri_cdk.handlers.serviceaid.config import Config
 
 needs_moto = pytest.mark.skipif(not HAS_MOTO, reason="requires moto")
 

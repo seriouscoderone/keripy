@@ -24,9 +24,9 @@ from keri.kering import Kinds, Vrsn_1_0
 from keri.peer import exchanging
 from keri.vc import protocoling
 
-from serviceaid import runtime
-from serviceaid.config import Config
-from serviceaid.contract import service, Reply
+from keri_cdk.handlers.serviceaid import runtime
+from keri_cdk.handlers.serviceaid.config import Config
+from keri_cdk.handlers.serviceaid.contract import service, Reply
 from _schema import RATING_SCHEMA_SAD
 
 needs_moto = pytest.mark.skipif(not HAS_MOTO, reason="requires moto")
@@ -117,7 +117,7 @@ def test_full_request_returns_verifiable_grant(monkeypatch):
         state = runtime.init(_cfg())
         state.hby.db.schema.pin(keys=(said,), val=schemer)
 
-        from serviceaid import handler as H
+        from keri_cdk.handlers.serviceaid import handler as H
 
         caller_hby, caller, event = _caller_request("/rate/apply", {"risk": 72})
         resp = H.handler(event, None)
@@ -174,7 +174,7 @@ def test_duplicate_message_is_idempotent(monkeypatch):
 
         state = runtime.init(_cfg())
         state.hby.db.schema.pin(keys=(schemer.said,), val=schemer)
-        from serviceaid import handler as H
+        from keri_cdk.handlers.serviceaid import handler as H
 
         caller_hby, _, event = _caller_request("/rate/apply", {"risk": 5})
         try:
@@ -196,7 +196,7 @@ def test_duplicate_message_is_idempotent(monkeypatch):
 def test_malformed_base64_body_returns_400():
     with mock_aws():
         _init_rating_service()
-        from serviceaid import handler as H
+        from keri_cdk.handlers.serviceaid import handler as H
 
         resp = H.handler({"path": "/rate/apply", "httpMethod": "POST",
                           "body": "a", "isBase64Encoded": True}, None)
@@ -212,7 +212,7 @@ def test_unanchored_signature_returns_400():
     the failure must surface as an empty capture drain => 400."""
     with mock_aws():
         _init_rating_service()
-        from serviceaid import handler as H
+        from keri_cdk.handlers.serviceaid import handler as H
 
         caller_hby = Habery(name="caller", temp=True,
                             salt=Salter(raw=b'caller9876543210').qb64)
@@ -241,7 +241,7 @@ def test_route_mismatch_returns_400():
     foreign exn finds no behavior and the /rate/apply drain stays empty)."""
     with mock_aws():
         _init_rating_service()
-        from serviceaid import handler as H
+        from keri_cdk.handlers.serviceaid import handler as H
 
         caller_hby, _, event = _caller_request("/other/route", {"risk": 5})
         event["path"] = "/rate/apply"   # POSTed path != embedded exn route

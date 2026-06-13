@@ -1,10 +1,16 @@
 """Shared fixtures: temp Habery, a saidified ACDC schema, recipient AID."""
 import os
+import sys
 import tempfile
 
 import pytest
 
 os.environ.setdefault("HOME", tempfile.mkdtemp(prefix="serviceaid-test-"))
+
+# This test directory holds _schema.py; under --import-mode=importlib pytest
+# does not add it to sys.path automatically, so the bare `from _schema import`
+# (here and in test_handler_e2e.py) would not resolve. Add it explicitly.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from keri.app.habbing import Habery
 from keri.core.signing import Salter

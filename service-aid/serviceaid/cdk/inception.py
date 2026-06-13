@@ -23,8 +23,8 @@ import logging
 from keri.core.signing import Salter
 from keri.db.secretkeeper import SecretStore
 
-from serviceaid import runtime
-from serviceaid.config import Config
+from keri_cdk.handlers.serviceaid import runtime
+from keri_cdk.handlers.serviceaid.config import Config
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)

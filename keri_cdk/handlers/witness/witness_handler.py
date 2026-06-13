@@ -14,6 +14,20 @@ _hab = None
 _parser = None
 
 
+def _retry_negative(read, *, attempts=4, delay=0.05):
+    """Retry a GSI-served read that returns falsy (eventual-consistency lag) up to
+    `attempts` times. A truthy result returns immediately; only the not-found path
+    retries. Returns the last (possibly falsy) result."""
+    import time
+    result = read()
+    for _ in range(attempts - 1):
+        if result:
+            return result
+        time.sleep(delay)
+        result = read()
+    return result
+
+
 def _clear_keeper(ks):
     """Wipe all keeper key material so Habery init can re-incept from scratch.
 
@@ -416,13 +430,17 @@ def handle_receipt_get(event):
         return response(400, {"error": "pre parameter required"})
     sn = int(params.get("sn", "0"))
 
-    dig = _hby.db.kels.getLast(keys=pre, on=sn)
+    # Both reads are served from the namespaced GSI on DynamoDB; a just-written
+    # event/receipt can read back empty under eventual-consistency lag. Retry
+    # the not-found path briefly so a freshly-receipted event isn't reported as
+    # a false 404. A present dig/wigs returns on the first read.
+    dig = _retry_negative(lambda: _hby.db.kels.getLast(keys=pre, on=sn))
     if dig is None:
         return response(404, {"error": f"no event at pre={pre} sn={sn}"})
     dig = dig.encode("utf-8") if isinstance(dig, str) else dig
 
     pre_b = pre.encode("utf-8") if isinstance(pre, str) else pre
-    wigs = _hby.db.wigs.get(keys=(pre_b, dig))
+    wigs = _retry_negative(lambda: _hby.db.wigs.get(keys=(pre_b, dig)))
     if not wigs:
         return response(404, {"error": "no witness receipts found"})
 
@@ -486,7 +504,10 @@ def handle_oobi_get(event):
         return response(404, {"error": f"unknown aid: {aid}"})
 
     kever = _hby.kevers[aid]
-    if not _hby.db.fullyWitnessed(kever.serder):
+    # fullyWitnessed reads the receipt/wig counts off the GSI; a just-collected
+    # final receipt can lag, so retry the not-yet-witnessed path briefly before
+    # returning a false 404. A truthy (fully-witnessed) result returns at once.
+    if not _retry_negative(lambda: _hby.db.fullyWitnessed(kever.serder)):
         return response(404, {"error": "not fully witnessed"})
 
     # We respond only for AIDs we control or are a witness for

@@ -24,10 +24,14 @@ except ImportError:
 
 needs_moto = pytest.mark.skipif(not HAS_MOTO, reason="requires moto")
 
-# Make sam-witness/ importable so `import witness_handler` resolves.
-_SAM_WITNESS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _SAM_WITNESS not in sys.path:
-    sys.path.insert(0, _SAM_WITNESS)
+# witness_handler.py relocated into the keri_cdk library
+# (keri_cdk/handlers/witness/). Put that dir on sys.path so the flat
+# `import witness_handler` below still resolves. sam-witness/tests ->
+# sam-witness -> repo root, then into keri_cdk/handlers/witness.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_WITNESS_HANDLER_DIR = os.path.join(_REPO_ROOT, "keri_cdk", "handlers", "witness")
+if _WITNESS_HANDLER_DIR not in sys.path:
+    sys.path.insert(0, _WITNESS_HANDLER_DIR)
 
 REGION = "us-east-1"
 BASER_TABLE = "witness-test-db"

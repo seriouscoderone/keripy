@@ -6,8 +6,8 @@ try:
 except ImportError:
     HAS_MOTO = False
 
-from serviceaid.config import Config
-from serviceaid import runtime
+from keri_cdk.handlers.serviceaid.config import Config
+from keri_cdk.handlers.serviceaid import runtime
 
 needs_moto = pytest.mark.skipif(not HAS_MOTO, reason="requires moto")
 
@@ -53,7 +53,7 @@ def test_init_incepts_transferable_aid_with_encrypted_keeper(monkeypatch):
 
 
 def test_capture_handler_drain_clears():
-    from serviceaid.runtime import _CaptureHandler
+    from keri_cdk.handlers.serviceaid.runtime import _CaptureHandler
     h = _CaptureHandler(resource="/r")
     h.handle(serder="s1")
     h.handle(serder="s2", attachments=["a"])

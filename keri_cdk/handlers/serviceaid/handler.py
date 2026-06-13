@@ -54,10 +54,10 @@ def _json_response(status, obj):
 def handler(event, context):
     # CloudFormation Custom Resource events (inception) share this Lambda.
     # They carry RequestType instead of httpMethod — delegate before HTTP
-    # routing. serviceaid.cdk lands in Task 11; the import is lazy so the
-    # HTTP path never touches it.
+    # routing. The inception CR still lives in serviceaid.cdk (it relocates in
+    # a later task); the import is lazy so the HTTP path never touches it.
     if "RequestType" in event:
-        from .cdk.inception import on_event
+        from serviceaid.cdk.inception import on_event
         return on_event(event, context)
 
     state = runtime.init()

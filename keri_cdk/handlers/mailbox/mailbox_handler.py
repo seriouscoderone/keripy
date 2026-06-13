@@ -26,6 +26,20 @@ _parser = None
 _initialized = False
 
 
+def _retry_negative(read, *, attempts=4, delay=0.05):
+    """Retry a GSI-served read that returns falsy (eventual-consistency lag) up to
+    `attempts` times. A truthy result returns immediately; only the not-found path
+    retries. Returns the last (possibly falsy) result."""
+    import time
+    result = read()
+    for _ in range(attempts - 1):
+        if result:
+            return result
+        time.sleep(delay)
+        result = read()
+    return result
+
+
 def _clear_keeper(ks):
     """Wipe all keeper key material so Habery init can re-incept from scratch.
 
@@ -429,7 +443,15 @@ class OOBIResource:
             return
 
         kever = _hby.kevers[aid]
-        if not _hby.db.fullyWitnessed(kever.serder):
+        # Mirror the witness handler's false-404 guard: fullyWitnessed reads
+        # receipt/wig counts off the GSI, which can lag a just-collected final
+        # receipt, so retry the not-yet-witnessed path briefly before a false
+        # 404. A truthy result returns at once. NOTE: _retry_negative sleeps
+        # synchronously; the not-found retry therefore briefly blocks this
+        # coroutine's event loop (bounded: (attempts-1)*delay ≈ 0.15s worst
+        # case, only on the rare not-yet-witnessed path). The OOBI self-AID is
+        # witnessed at cold-start init, so steady state hits the truthy fast path.
+        if not _retry_negative(lambda: _hby.db.fullyWitnessed(kever.serder)):
             resp.media = {"error": "not fully witnessed"}
             resp.status = falcon.HTTP_404
             return

@@ -7,7 +7,7 @@ except ImportError:
     HAS_MOTO = False
 
 from keri.db.dynamodbing import DynamoDBer
-from serviceaid.idempotency import Ledger, PROC_STORE
+from keri_cdk.handlers.serviceaid.idempotency import Ledger, PROC_STORE
 
 needs_moto = pytest.mark.skipif(not HAS_MOTO, reason="requires moto")
 

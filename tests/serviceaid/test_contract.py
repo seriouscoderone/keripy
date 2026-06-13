@@ -1,5 +1,5 @@
 import pytest
-from serviceaid.contract import Service, Request, Reply, TestRuntime
+from keri_cdk.handlers.serviceaid.contract import Service, Request, Reply, TestRuntime
 
 
 def test_command_registers_by_route():

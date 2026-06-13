@@ -7,7 +7,7 @@ from keri.peer import exchanging
 from keri.vc import protocoling
 from keri.vdr import credentialing
 
-from serviceaid.issuing import ensure_registry, issue_grant
+from keri_cdk.handlers.serviceaid.issuing import ensure_registry, issue_grant
 
 
 def test_issue_grant_produces_verifiable_acdc(issuer_hby, rating_schema, recipient_pre):

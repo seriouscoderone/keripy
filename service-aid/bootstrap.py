@@ -19,4 +19,4 @@ if _lib_path:
 
     ctypes.util.find_library = _patched
 
-from serviceaid.handler import handler  # noqa: E402,F401
+from keri_cdk.handlers.serviceaid.handler import handler  # noqa: E402,F401
