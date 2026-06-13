@@ -82,13 +82,29 @@ add x86_64 only if an adopter requires it).
   - **Witness** is a standard API Gateway proxy Lambda (request → `witness_handler.handler(event, context)` →
     response). The simplest zip+layer conversion: pure-Python handler + `KeriRuntimeLayer`.
   - **Mailbox** is a **Falcon ASGI app served by uvicorn behind the Lambda Web Adapter (LWA)** with
-    **API-Gateway response streaming** (SSE long-poll). This runtime model MUST be preserved: the zip
-    function carries the Falcon app + bootstrap; **LWA is provided as a SEPARATE Lambda layer** (the
-    AWS-published arm64 LWA layer, alongside `KeriRuntimeLayer`); the LWA env is preserved
-    (`AWS_LWA_INVOKE_MODE=response_stream`, `AWS_LWA_PORT`, `AWS_LWA_READINESS_CHECK_PATH=/status`);
-    and the API Gateway REST integration's `ResponseTransferMode=STREAMING` (the explicit-method setup
-    from the SAM template) is reproduced in CDK. This is the most complex stack in Phase B — the
-    real-AWS smoke (below) must cover the mailbox streaming path, not just the witness.
+    **API-Gateway response streaming** (SSE long-poll). This runtime model MUST be preserved:
+    - **LWA as a SEPARATE Lambda layer** — the AWS-published arm64 LWA layer (`from_layer_version_arn`,
+      pinned to the current version for the region/arch), alongside `KeriRuntimeLayer`.
+    - **LWA zip wiring** (the fiddly bit — implementer verifies against the current LWA layer): a
+      `run.sh` entrypoint launching `uvicorn app:app --host 0.0.0.0 --port $PORT` via
+      `AWS_LAMBDA_EXEC_WRAPPER=/opt/bootstrap` (the documented zip pattern), OR the extension style the
+      current container uses; env `AWS_LWA_INVOKE_MODE=response_stream`, port (`PORT`/`AWS_LWA_PORT`),
+      `AWS_LWA_READINESS_CHECK_PATH=/status`.
+    - **API-Gateway streaming, CDK-native (this SIMPLIFIES vs SAM):** API Gateway REST gained native
+      response streaming (Nov 2025); recent `aws-cdk-lib` exposes it as
+      `apigw.LambdaIntegration(response_transfer_mode=apigw.ResponseTransferMode.STREAM)` — NO escape
+      hatch (the SAM template needed an explicit `AWS::ApiGateway::Method` with raw `ResponseTransferMode`
+      only because SAM/OpenAPI couldn't express it). **Implementer must verify the pinned `aws-cdk-lib`
+      version supports `ResponseTransferMode.STREAM`; if it predates it, fall back to a `CfnMethod`
+      escape hatch** (`responseTransferMode: STREAM` + the `.../response-streaming-invocations`
+      integration URI). Endpoint MUST be **REGIONAL** (edge-optimized buffers and defeats streaming);
+      integration timeout up to **15 min** (STREAM lifts the old 29s ceiling).
+    - **Preserve the existing SSE generator logic** (`_stream_mbx_response` + its keep-alive pings) —
+      do NOT rewrite to Falcon-native `resp.sse`/`SSEvent` in Phase B; that's a behavior-changing
+      handler refactor noted as a possible FUTURE cleanup, not part of this conversion.
+
+    This is the most complex stack in Phase B — the real-AWS smoke (below) MUST cover the mailbox
+    streaming path (an actual SSE long-poll message delivery), not just the witness.
 - Layer + function unzipped size must stay under the **250 MB** Lambda limit (libsodium is tiny;
   keripy + deps are modest — verified during the build task).
 - **Provenance:** the layer is built transparently in CI from pinned source and rides the anchored
@@ -178,6 +194,13 @@ is net-new feature work for a separate, later effort.
   publish pipeline + KEL-anchored release automation is a later effort.
 - **A no-Docker container fallback / SAR distribution** — the zip+layer model is the chosen path.
 - **Building additional ecosystems** (gym, etc.) — they are future apps on the library.
+- **Mailbox long-poll cost/concurrency tuning** — Lambda bills wall-clock for the whole time an SSE
+  long-poll is held open and pins one concurrency unit per open connection. A production mailbox may
+  want an optional reserved-concurrency *ceiling* (to cap blast radius) and/or a shift to an API
+  Gateway WebSocket API (which holds the connection off-Lambda). Noted as a future operational/cost
+  decision; Phase B keeps the mailbox uncapped (no reserved-concurrency) and on the SSE/LWA path.
+- **Falcon-native `resp.sse`/`SSEvent` SSE refactor** — possible future cleanup of the mailbox's
+  hand-rolled SSE framing; Phase B preserves the working generator.
 
 ## Execution
 
