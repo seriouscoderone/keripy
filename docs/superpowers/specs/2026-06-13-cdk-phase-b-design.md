@@ -42,22 +42,50 @@ keripy/
 │   ├── runtime_layer.py         #   KeriRuntimeLayer       (libsodium + keripy native deps)
 │   ├── witness_stack.py         #   WitnessStack           (new; zip + layer)
 │   ├── mailbox_stack.py         #   MailboxStack           (new; zip + layer)
-│   ├── service_aid.py           #   ServiceAid + inception (moved)
+│   ├── service_aid.py           #   ServiceAid construct + inception CR (moved)
 │   ├── watcher_stack.py         #   WatcherStack           (SEAM ONLY: props + skeleton)
 │   └── handlers/                #   generic infra Lambda code (pure Python)
-│       ├── witness/             #     moved from sam-witness/ (handler + helpers)
-│       └── mailbox/             #     moved from sam-mailbox/ (handler + helpers)
+│       ├── witness/             #     moved from sam-witness/
+│       ├── mailbox/             #     moved from sam-mailbox/
+│       └── serviceaid/          #     generic Service-AID runtime framework
+│                                #     (config/contract/issuing/authorize/runtime/handler),
+│                                #     moved from service-aid/serviceaid/
 ├── ecosystems/
-│   └── keri_host/               # the FIRST ecosystem app (the consumer)
-│       ├── app.py               #   cdk.App composing keri.host's stacks
+│   └── keri_host/               # the keri.host federation app — WITNESS + MAILBOX only
+│       ├── app.py               #   cdk.App composing WitnessStack + MailboxStack
 │       └── cdk.json
-├── service-aid/examples/rating_engine/   # stays — the Service-AID business-compute example
-└── (keripy core unchanged)
+├── examples/
+│   └── gated_retrieval/         # library-usage example (validates ServiceAid + core-table lock)
+│       ├── app.py               #   composes KeriCoreStack + ServiceAid(gated lookup)
+│       ├── gated_handler.py     #   made-up business compute + gated-record ACDC schema
+│       └── cdk.json
+└── (keripy core unchanged; old service-aid/, sam-witness/, sam-mailbox/ removed)
 ```
-The old `sam-witness/` and `sam-mailbox/` directories are **removed** (clean slate). Generic infra
-handlers (witness, mailbox) **move into the library** (`keri_cdk/handlers/`) — every ecosystem
-reuses identical protocol logic. Only Service-AID *business compute* stays app-side (the
-`rating_engine` example is the pattern; the app supplies a `handler_module`).
+The old `sam-witness/`, `sam-mailbox/`, and the `service-aid/serviceaid/` framework package are
+**absorbed into `keri_cdk`** (clean slate). Generic infra logic — witness + mailbox handlers AND the
+**Service-AID runtime framework** (config/contract/issuing/authorize/runtime/handler) — **moves into
+the library**; every ecosystem reuses identical protocol machinery. Only Service-AID *business compute*
++ its ACDC schemas stay app-side (the `gated_retrieval` example is the pattern; the app supplies a
+`handler_module`).
+
+**keri.host needs no Service-AID** — its ecosystem app is witness + mailbox (the federation infra). The
+**Gated Retrieval** Service-AID is a library-usage *example* (`examples/gated_retrieval/`) that doubles
+as the e2e validation of the `ServiceAid` construct + `KeriCoreStack` + the cross-stack lock.
+
+### Example: the Gated Retrieval Service-AID (made-up, generic)
+
+A "prove-then-retrieve" Service-AID modeled on the insurance/credit-bureau pattern (Verisk MVR, credit
+reports) — entirely fictional schemas. A *Requestor* (e.g. an insurer) wants *gated data* about a
+*Subject*: it sends a signed `exn` **gated request** → the Service-AID's **authorize gate** confirms the
+requestor is permitted → it runs a made-up **gated lookup** compute → it returns a **gated-response
+ACDC** (a generic `gated-record` credential with "cool data") via IPEX grant.
+
+**Gate fidelity for Phase B = level (a): allowlist-themed.** The requestor's AID is on the Service-AID's
+allowlist (= "proved access"); the response is the `gated-record` ACDC. This uses the **shipped**
+framework as-is (allowlist authz is wired + reachable) — no new framework feature, stays an
+infra-conversion. The made-up ACDCs (`gated-access`, `gated-record`) are defined as generic example
+schemas. The fuller **level (b)** — requestor *presents* a `gated-access` ACDC the service *verifies* —
+is a deferred follow-on (see Out of Scope).
 
 ### Runtime model: zip + KeriRuntimeLayer (arm64)
 
@@ -119,12 +147,14 @@ add x86_64 only if an adopter requires it).
   the table via a **real CDK cross-stack reference** (`core.table` object, NOT a by-name literal),
   which generates the CloudFormation `Export`/`Fn::ImportValue` **lifecycle lock** — CloudFormation
   then refuses to delete/replace the table's export while a service imports it (the desired guard
-  for a foundational append-only ledger table). This replaces the current loose by-name reference
-  in `service_aid_construct.py` + `examples/rating_engine/app.py`.
+  for a foundational append-only ledger table). This replaces the current loose by-name reference in
+  the `ServiceAid` construct; the lock is exercised by the **`examples/gated_retrieval` app**
+  (`KeriCoreStack` + the Gated Retrieval `ServiceAid`), since the keri_host ecosystem app has no
+  Service-AID.
 - **Witness/mailbox keep their OWN Baser tables** in Phase B (each `WitnessStack`/`MailboxStack`
   creates its own `<name>-db` table, as the SAM templates did). They consume `KeriCoreStack` only
   in Phase C (pooling). So the cross-stack lock in Phase B applies to the Service-AID ↔ core-table
-  edge.
+  edge (the gated_retrieval example).
 
 ### Concurrency & resilience (the Phase-A follow-ons)
 
@@ -177,10 +207,14 @@ is net-new feature work for a separate, later effort.
   zip+layer witness to `personal`/us-east-1, confirm it incepts, signs, and serves an OOBI — proving
   `pysodium`/libsodium resolve from `/opt/lib` in a real Lambda. Joins the existing
   `service-aid/probes/` family in spirit (a `keri_cdk` validation script).
-- **Full ecosystem-app deploy validation**: `cdk deploy` `ecosystems/keri_host` to `personal`,
-  confirm the witness + mailbox + Service-AID come up, the Service-AID ↔ core-table lock is in place,
-  an end-to-end exchange works (the existing Service-AID e2e path), AND the **mailbox SSE long-poll
-  delivers a message** (validates the LWA + response-streaming model end-to-end, not just cold start).
+- **Full deploy validation (two apps)** to `personal`:
+  - `cdk deploy ecosystems/keri_host` → witness + mailbox come up on their own tables; the **mailbox
+    SSE long-poll delivers a message** (validates LWA + response-streaming end-to-end, not just cold
+    start).
+  - `cdk deploy examples/gated_retrieval` → `KeriCoreStack` + the Gated Retrieval `ServiceAid` come up;
+    the **Service-AID ↔ core-table cross-stack lock** is in place; and a **gated request → allowlist
+    gate → gated-response ACDC** exchange works end-to-end (the existing Service-AID issuance path,
+    re-themed).
 - Existing keripy core suites stay green (the handler moves must not change behavior beyond the
   responder retries; the moved handler code keeps its current logic).
 
@@ -189,6 +223,10 @@ is net-new feature work for a separate, later effort.
 - **Phase C** — pooling witness/mailbox/watcher onto `KeriCoreStack` (namespacing them onto the
   shared table) + any associated migration. Witness/mailbox keep their own tables here.
 - **Building a working watcher** — seam only.
+- **Gated Retrieval level (b): true credential-presentation gate** — the requestor *presents* a
+  `gated-access` ACDC the Service-AID *verifies* via `Policy.required_schema`. Deferred follow-on; it
+  completes keripy's stubbed required-credential authz (shipped v1 passes `credentials=[]`). Phase B's
+  example uses the allowlist gate (a). See `project_gated_retrieval_credential_gate` memory.
 - **x86_64** runtime — arm64 only.
 - **Publishing `keri_cdk` to PyPI/CodeArtifact** — structure it as publishable, but the actual
   publish pipeline + KEL-anchored release automation is a later effort.
