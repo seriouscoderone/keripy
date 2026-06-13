@@ -1,2 +1,3 @@
 from .core_stack import KeriCoreStack
-__all__ = ["KeriCoreStack"]
+from .runtime_layer import KeriRuntimeLayer
+__all__ = ["KeriCoreStack", "KeriRuntimeLayer"]

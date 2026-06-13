@@ -5,6 +5,18 @@ import base64
 import os
 import logging
 
+# Resolve libsodium BEFORE any keri import (keri imports are deferred into
+# init()). On the zip+KeriRuntimeLayer entrypoint (witness_handler.handler)
+# there is no bootstrap wrapper, so the handler installs the find_library
+# patch itself. bootstrap.ensure_libsodium() is idempotent and a no-op if the
+# .so cannot be found (e.g. running under a host venv that loads libsodium
+# normally). Best-effort: never let it break import of this module.
+try:
+    from bootstrap import ensure_libsodium
+    ensure_libsodium()
+except Exception:  # pragma: no cover - host/test envs without bootstrap on path
+    pass
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
