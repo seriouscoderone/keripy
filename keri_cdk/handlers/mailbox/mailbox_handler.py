@@ -11,26 +11,19 @@ import base64
 import json
 import logging
 import os
-import sys
 import time
 
 # Resolve libsodium BEFORE any keri import (keri imports are deferred into
-# init()/build_app()). The shared shim lives one level up at
-# keri_cdk/handlers/_libsodium.py; each handler dir is its own Lambda asset, so
-# make the parent ``handlers/`` dir importable. Idempotent and a no-op if the
-# .so cannot be found (e.g. a host venv that loads libsodium normally).
-_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _PARENT not in sys.path:
-    sys.path.insert(0, _PARENT)
+# init()/build_app()). bootstrap.py lives in this same Lambda asset dir
+# (Code.from_asset("keri_cdk/handlers/mailbox") -> /var/task), so the import
+# resolves at runtime. ensure_libsodium() is idempotent and a no-op if the .so
+# cannot be found (e.g. a host venv that loads libsodium normally). Best-effort:
+# never let it break import of this module.
 try:
-    from _libsodium import ensure_libsodium  # zip/container: parent dir on sys.path
-except ImportError:  # pragma: no cover - resolved as a package in the host env
-    try:
-        from keri_cdk.handlers._libsodium import ensure_libsodium
-    except ImportError:
-        ensure_libsodium = None
-if ensure_libsodium is not None:
+    from bootstrap import ensure_libsodium
     ensure_libsodium()
+except Exception:  # pragma: no cover - host/test envs without bootstrap on path
+    pass
 
 import falcon
 import falcon.asgi
@@ -492,6 +485,21 @@ class OOBIResource:
         resp.status = falcon.HTTP_200
 
 
+class StatusResource:
+    """LWA readiness probe target (AWS_LWA_READINESS_CHECK_PATH=/status).
+
+    LWA polls this path and only marks the Lambda ready once it returns 2xx.
+    It must NOT depend on _hby/_hab: build_app() calls init() before the app is
+    served, so by the time a request lands the singletons are populated, but the
+    probe stays deliberately dependency-free so readiness reflects "the ASGI
+    server is up", which is exactly what LWA needs to start forwarding traffic.
+    """
+
+    async def on_get(self, req, resp):
+        resp.media = {"status": "ok"}
+        resp.status = falcon.HTTP_200
+
+
 class RootResource:
     """Handles all methods on /:
       - GET: mailbox status
@@ -569,6 +577,8 @@ def build_app():
     init()
     app = falcon.asgi.App()
     app.add_route("/", RootResource())
+    # LWA readiness probe (AWS_LWA_READINESS_CHECK_PATH=/status).
+    app.add_route("/status", StatusResource())
 
     oobi = OOBIResource()
     app.add_route("/oobi", oobi)
