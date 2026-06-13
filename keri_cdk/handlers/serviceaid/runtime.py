@@ -31,11 +31,20 @@ from keri.app.habbing import Habery
 from keri.app.configing import Configer
 from keri.vdr import credentialing
 
-from .config import Config
-from .contract import service, Service
-from .authorize import Policy
-from .issuing import ensure_registry
-from .idempotency import Ledger, PROC_STORE
+# Dual-mode imports: relative as a package submodule (tests); absolute when the
+# asset dir is a flat /var/task on Lambda. See handler.py for the rationale.
+try:
+    from .config import Config
+    from .contract import service, Service
+    from .authorize import Policy
+    from .issuing import ensure_registry
+    from .idempotency import Ledger, PROC_STORE
+except ImportError:  # pragma: no cover - flat /var/task on Lambda
+    from config import Config
+    from contract import service, Service
+    from authorize import Policy
+    from issuing import ensure_registry
+    from idempotency import Ledger, PROC_STORE
 
 logger = logging.getLogger(__name__)
 

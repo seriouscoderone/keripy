@@ -1,0 +1,34 @@
+{
+  "$id": "",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GatedRecord",
+  "description": "EXAMPLE / FICTIONAL schema. The ACDC issued by the Gated Retrieval Service AID once a caller is allowlist-gated: a made-up 'cool data' record handed back as a verifiable credential.",
+  "type": "object",
+  "properties": {
+    "v": {"type": "string"},
+    "d": {"type": "string"},
+    "i": {"type": "string"},
+    "ri": {"type": "string"},
+    "s": {"type": "string"},
+    "a": {
+      "oneOf": [
+        {"type": "string"},
+        {
+          "type": "object",
+          "properties": {
+            "d": {"type": "string"},
+            "i": {"type": "string"},
+            "dt": {"type": "string", "format": "date-time"},
+            "recordId": {"type": "string", "description": "made-up opaque record handle"},
+            "tier": {"type": "string", "description": "made-up access tier label"},
+            "data": {"type": "string", "description": "the made-up 'cool data' payload"}
+          },
+          "additionalProperties": false,
+          "required": ["d", "i", "dt", "recordId", "data"]
+        }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "required": ["v", "d", "i", "ri", "s", "a"]
+}

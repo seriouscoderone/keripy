@@ -13,14 +13,41 @@ an exception. Both paths return 400.
 """
 from __future__ import annotations
 
+# Resolve libsodium BEFORE any keri import (keri imports are deferred into
+# runtime.init()). On the zip+KeriRuntimeLayer entrypoint (handler.handler)
+# there is no bootstrap wrapper, so the handler installs the find_library patch
+# itself. ensure_libsodium() is idempotent and a no-op if the .so cannot be
+# found (e.g. running under a host venv that loads libsodium normally).
+# Best-effort: never let it break import of this module (host/test envs may
+# import this as a package submodule where bare `bootstrap` is not on the path).
+try:
+    from bootstrap import ensure_libsodium  # flat /var/task (Lambda)
+except ImportError:  # pragma: no cover - package-mode / host test envs
+    try:
+        from .bootstrap import ensure_libsodium  # package mode (tests)
+    except ImportError:
+        ensure_libsodium = None
+if ensure_libsodium is not None:
+    ensure_libsodium()
+
 import base64
 import json
 import logging
 
-from . import runtime
-from .authorize import authorize
-from .contract import Request
-from .issuing import issue_grant
+# Dual-mode imports: relative when loaded as a package submodule (tests import
+# keri_cdk.handlers.serviceaid.*); absolute when the asset dir is on sys.path as
+# a flat /var/task (Lambda, handler="handler.handler"). Each serviceaid module
+# uses this same idiom so the asset is self-contained without a parent package.
+try:
+    from . import runtime
+    from .authorize import authorize
+    from .contract import Request
+    from .issuing import issue_grant
+except ImportError:  # pragma: no cover - flat /var/task on Lambda
+    import runtime
+    from authorize import authorize
+    from contract import Request
+    from issuing import issue_grant
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -54,10 +81,16 @@ def _json_response(status, obj):
 def handler(event, context):
     # CloudFormation Custom Resource events (inception) share this Lambda.
     # They carry RequestType instead of httpMethod — delegate before HTTP
-    # routing. The inception CR still lives in serviceaid.cdk (it relocates in
-    # a later task); the import is lazy so the HTTP path never touches it.
+    # routing. The import is lazy so the HTTP path never touches it. The
+    # inception module now lives in keri_cdk (Task 6 relocation); the asset that
+    # ships THIS handler to Lambda must also ship _inception.py — see the
+    # `handler_code_path` bundling note in keri_cdk/service_aid.py. Dual-mode:
+    # absolute when _inception rides flat in /var/task, package-path otherwise.
     if "RequestType" in event:
-        from serviceaid.cdk.inception import on_event
+        try:
+            from _inception import on_event  # flat /var/task (Lambda)
+        except ImportError:
+            from keri_cdk._inception import on_event  # package mode (tests)
         return on_event(event, context)
 
     state = runtime.init()

@@ -29,7 +29,7 @@ Usage:
 Real key shapes reproduced (src/keri/db/dynamodbing.py:344-494):
   normal item : PK = "{ns}#{subdb}#{hex}"   gsi_pk = "{ns}#{subdb}"   gsi_sk = "{hex}"
   meta   item : PK = "__meta__#{ns}#{subdb}" gsi_pk = "__meta__"      gsi_sk = "{ns}#{subdb}"
-Production LeadingKeys patterns (service_aid_construct.py): ["{alias}:*#*", "__meta__#{alias}:*"]
+Production LeadingKeys patterns (keri_cdk/service_aid.py): ["{alias}:*#*", "__meta__#{alias}:*"]
 """
 import argparse
 import json
@@ -76,7 +76,7 @@ def meta_item(ns: str) -> dict:
 
 
 def leading_keys_policy(table_arn: str, alias: str) -> dict:
-    """The EXACT production statement (service_aid_construct.py), verbatim shape."""
+    """The EXACT production statement (keri_cdk/service_aid.py), verbatim shape."""
     return {
         "Version": "2012-10-17",
         "Statement": [{

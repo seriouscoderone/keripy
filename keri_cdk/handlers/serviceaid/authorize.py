@@ -3,7 +3,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .contract import Request
+try:
+    from .contract import Request  # package mode (tests)
+except ImportError:  # pragma: no cover - flat /var/task on Lambda
+    from contract import Request
 
 
 @dataclass

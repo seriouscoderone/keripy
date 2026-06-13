@@ -1,0 +1,32 @@
+{
+  "$id": "",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GatedAccess",
+  "description": "EXAMPLE / FICTIONAL schema. The made-up 'prove' credential a caller would present to claim eligibility for gated retrieval. In v1 the gate is enforced by the allowlist (sender-AID gating) — caller-presented-ACDC extraction is DEFERRED (see handler.py / Policy.required_schema), so this schema is illustrative only and is NOT yet required to pass the gate.",
+  "type": "object",
+  "properties": {
+    "v": {"type": "string"},
+    "d": {"type": "string"},
+    "i": {"type": "string"},
+    "ri": {"type": "string"},
+    "s": {"type": "string"},
+    "a": {
+      "oneOf": [
+        {"type": "string"},
+        {
+          "type": "object",
+          "properties": {
+            "d": {"type": "string"},
+            "i": {"type": "string"},
+            "dt": {"type": "string", "format": "date-time"},
+            "clearance": {"type": "string", "description": "made-up clearance label"}
+          },
+          "additionalProperties": false,
+          "required": ["d", "i", "dt", "clearance"]
+        }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "required": ["v", "d", "i", "ri", "s", "a"]
+}
