@@ -274,3 +274,28 @@ is net-new feature work for a separate, later effort.
 Subagent-driven (implementer + spec-compliance review + code-quality review per task), final
 whole-branch review, then merge to `development`. The real-AWS smoke + ecosystem deploy are
 invoked/inspected by the controller on `personal` (operator pre-authorized real-AWS testing).
+
+## Phase B — landed status (2026-06-13)
+
+**DONE + real-AWS-validated:** `keri_cdk` library (KeriCoreStack / KeriRuntimeLayer /
+WitnessStack / MailboxStack / ServiceAid construct / WatcherStack seam) and the `keri_host`
+ecosystem app (witness + mailbox stacks). Both were deployed to `personal` (`wit.keri.host` /
+`mbox.keri.host`, since torn down) and exercised end-to-end: incept/sign/OOBI for the witness;
+LWA + SSE response-streaming for the mailbox. Two real-AWS bugs found and fixed during that
+run: uvicorn was missing from KeriRuntimeLayer (witness 502 root cause), and the mailbox
+`run.sh` lacked `PYTHONPATH=/opt/python` so the LWA subprocess could not find keripy.
+
+**DONE (synth-validated only):** The `ServiceAid` construct — cross-stack `Fn::ImportValue`
+core-table lock, keeper IAM, `dynamodb:LeadingKeys` condition policy (separately real-AWS-
+verified via `keri_cdk/probes/leadingkeys/`), zip + KeriRuntimeLayer, reserved-concurrency=1.
+The `gated_retrieval` example exercises the construct at synth time.
+
+**DEFERRED (not a gap in the conversion — deliberate scope boundary):** The Service-AID
+developer-compute seam (`compute_code: aws_lambda.Code` parameter + framework-in-a-layer +
+`IGrantable` + pass-through props), its first real deploy, and multi-command route dispatch
+(commands on `/<eco>/cmd/<verb>_<noun>` exn routes; `/ipex/*` reserved). The gated example is
+a single-command placeholder pending that effort. This work is deferred to the future
+"Service-AID as autonomous micro-app runtime" design + implementation effort.
+
+SAM federation code (sam-witness / sam-mailbox / service-aid directories) is **untouched/live
+in production**; source is **recoverable via tag `sam-federation-v1`**.
