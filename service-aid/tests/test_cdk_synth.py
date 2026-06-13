@@ -3,7 +3,7 @@ import pytest
 cdk = pytest.importorskip("aws_cdk")
 from aws_cdk import App
 from aws_cdk.assertions import Template
-from serviceaid.cdk.keri_core_stack import KeriCoreStack
+from keri_cdk import KeriCoreStack
 
 
 def test_core_stack_creates_pooled_table_and_ssm_export():
