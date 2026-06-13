@@ -181,15 +181,19 @@ class ServiceAid(Construct):
         # a dedicated CR role would let the steady-state fn be GetSecretValue-only.
         # Core (pooled) table: scoped to this service's namespace prefixes only.
         #
-        # SECURITY-CRITICAL + UNVERIFIED: the multi-tenant boundary for the
-        # pooled core table rests on dynamodb:LeadingKeys scoping GSI queries
-        # (subdb-index) by the namespaced gsi_pk. AWS's handling of LeadingKeys
-        # for *index* queries is not validated here (moto does not enforce IAM
-        # conditions). MUST be empirically verified before production: deploy two
-        # aliases and confirm a cross-tenant GSI Query from one role is DENIED.
-        # If LeadingKeys is not populated for index queries, this condition is
-        # vacuous and the pooled-table design needs rework (per-tenant tables or
-        # payload encryption). See plan Task 12 review.
+        # SECURITY-CRITICAL (VERIFIED): the multi-tenant boundary for the pooled
+        # core table rests on dynamodb:LeadingKeys scoping GSI queries
+        # (subdb-index) by the namespaced gsi_pk.  This was empirically verified
+        # against real AWS — the probe at service-aid/probes/leadingkeys/probe.py
+        # (see its README) created two tenant roles with the exact production
+        # policy, seeded both namespaces, then confirmed from tenant A's role:
+        #   - cross-tenant GSI Query (tenant B's gsi_pk)   → DENIED  ← the crux
+        #   - shared __meta__ GSI Query (another tenant)   → DENIED
+        #   - own GSI Query and base-table ops              → ALLOW (as expected)
+        # AWS does populate dynamodb:LeadingKeys for index queries; the boundary
+        # is sound.  moto/DynamoDB-Local do not enforce IAM conditions, so the
+        # probe must be re-run after any IAM policy change or major keripy key
+        # schema change (i.e. whenever gsi_pk shape changes).
         #
         # NOTE: DescribeTable has no item keys, so it is vacuously allowed under
         # the LeadingKeys condition. It is required because DynamoDBer.open ->

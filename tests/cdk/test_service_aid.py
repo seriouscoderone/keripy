@@ -44,3 +44,21 @@ def test_service_aid_leadingkeys_iam_present():
     svc.has_resource_properties("AWS::IAM::Policy", {"PolicyDocument": {"Statement":
         Match.array_with([Match.object_like({"Condition": Match.object_like({
             "ForAllValues:StringLike": Match.any_value()})})])}})
+
+
+def test_service_side_imports_core_table_lock():
+    """The SERVICE stack must contain an Fn::ImportValue for the core table.
+
+    The exporting side (core stack) is covered by
+    test_core_table_export_creates_cross_stack_lock.  This test covers the
+    consuming side so that a regression that drops the cross-stack reference
+    (e.g. inlining the table ARN as a literal) is caught before it silently
+    removes the lifecycle lock.
+    """
+    import json
+    svc, _ = _synth()
+    body = json.dumps(svc.to_json())
+    assert "Fn::ImportValue" in body, (
+        "service stack does not import the core table — cross-stack lifecycle "
+        "lock is broken (the core stack could be deleted while the service is live)"
+    )
