@@ -33,8 +33,18 @@ witness_domain = ctx("witness_domain") or "witness.example.com"
 mailbox_domain = ctx("mailbox_domain") or "mailbox.example.com"
 hosted_zone_id = ctx("hosted_zone_id") or "Z000000000000000"
 
+# Table names ({name}-db) are context-overridable so a parallel/temporary
+# deploy can use distinct names (e.g. wit/mbox) without colliding with a live
+# witness-db/mailbox-db. Defaults unchanged so synth tests stay green.
+witness_name = ctx("witness_name") or "witness"
+mailbox_name = ctx("mailbox_name") or "mailbox"
+
+# Optional override for the AWS Lambda Web Adapter layer ARN (version pinned in
+# the stack default); lets a deploy pass a current published version.
+lwa_layer_arn = ctx("lwa_layer_arn")
+
 WitnessStack(app, "KeriHostWitness",
-             name="witness",
+             name=witness_name,
              alias="witness",
              domain_name=witness_domain,
              hosted_zone_id=hosted_zone_id,
@@ -42,11 +52,12 @@ WitnessStack(app, "KeriHostWitness",
              env=env)
 
 MailboxStack(app, "KeriHostMailbox",
-             name="mailbox",
+             name=mailbox_name,
              alias="mailbox",
              domain_name=mailbox_domain,
              hosted_zone_id=hosted_zone_id,
              mailbox_url=f"https://{mailbox_domain}",
+             lwa_layer_arn=lwa_layer_arn,
              env=env)
 
 app.synth()
