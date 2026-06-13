@@ -11,7 +11,26 @@ import base64
 import json
 import logging
 import os
+import sys
 import time
+
+# Resolve libsodium BEFORE any keri import (keri imports are deferred into
+# init()/build_app()). The shared shim lives one level up at
+# keri_cdk/handlers/_libsodium.py; each handler dir is its own Lambda asset, so
+# make the parent ``handlers/`` dir importable. Idempotent and a no-op if the
+# .so cannot be found (e.g. a host venv that loads libsodium normally).
+_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PARENT not in sys.path:
+    sys.path.insert(0, _PARENT)
+try:
+    from _libsodium import ensure_libsodium  # zip/container: parent dir on sys.path
+except ImportError:  # pragma: no cover - resolved as a package in the host env
+    try:
+        from keri_cdk.handlers._libsodium import ensure_libsodium
+    except ImportError:
+        ensure_libsodium = None
+if ensure_libsodium is not None:
+    ensure_libsodium()
 
 import falcon
 import falcon.asgi
@@ -558,3 +577,28 @@ def build_app():
     app.add_route("/oobi/{aid}/{role}/{eid}", oobi)
 
     return app
+
+
+class _LazyApp:
+    """Module-level ASGI application proxy for ``uvicorn mailbox_handler:app``.
+
+    uvicorn (without ``--factory``) treats ``module:app`` as the ASGI app
+    itself, so ``app`` must be an ASGI callable — not the ``build_app`` factory.
+    Building eagerly at import would run ``init()`` (DynamoDB + keri) at module
+    import, which breaks the host import smoke. This proxy defers ``build_app()``
+    to the first ASGI call (the LWA cold start), then delegates every scope.
+    """
+
+    __slots__ = ("_app",)
+
+    def __init__(self):
+        self._app = None
+
+    async def __call__(self, scope, receive, send):
+        if self._app is None:
+            self._app = build_app()
+        return await self._app(scope, receive, send)
+
+
+# Module-level ASGI app for uvicorn (run.sh: `uvicorn mailbox_handler:app`).
+app = _LazyApp()
