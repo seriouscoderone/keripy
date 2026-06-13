@@ -87,6 +87,30 @@ infra-conversion. The made-up ACDCs (`gated-access`, `gated-record`) are defined
 schemas. The fuller **level (b)** — requestor *presents* a `gated-access` ACDC the service *verifies* —
 is a deferred follow-on (see Out of Scope).
 
+### Service-AID developer interface (extension points) — a guiding principle
+
+The Service-AID is intended as a **new kind of API surface**: rather than implementing a sprawl of
+REST endpoints (imperative *how*), a developer **declares an entity** — a KERI principal with a defined
+responsibility — and fills a small set of **extension points**, while the framework supplies all the
+KERI/identity/verifiability plumbing (key state, inception, signature verification, IPEX, witnessing).
+This aligns with the direction of agentic AI: an autonomous, identity-bearing, *accountable* entity
+that takes signed requests and returns signed, attributable results.
+
+Phase B therefore treats this developer-facing surface as a **first-class, documented API** as it
+relocates the framework into `keri_cdk` — exposing the *existing* seams with explicit contracts and
+keeping the framework **open** (add an extension point without modifying the core). The seams Phase B
+exposes cleanly:
+- **Compute** — the developer's business function (`handler_module`; the gated lookup is the example).
+- **Authz** — the gate (Phase B: allowlist; credential-presentation is the deferred level-(b) follow-on).
+- Already-present, surfaced as part of the interface: the **request contract** (exn validation),
+  **ACDC issuance** (response schema + IPEX grant), **idempotency**, **runtime/init**.
+
+Designing *new* extension points and the full taxonomy of "what implementing an AID means" (lifecycle
+hooks, observability, delegation/governance, multi-credential policies, …) is **emergent and explicitly
+NOT part of Phase B** — it will be discovered and crafted as real ecosystems get built, as its own
+design effort. Phase B's job is to make the *existing* surface clean, documented, and extensible, not
+to invent the whole interface up front.
+
 ### Runtime model: zip + KeriRuntimeLayer (arm64)
 
 The two crypto-bearing infra Lambdas (witness, mailbox) and the Service-AID run as **zip Lambdas
@@ -232,6 +256,11 @@ is net-new feature work for a separate, later effort.
   publish pipeline + KEL-anchored release automation is a later effort.
 - **A no-Docker container fallback / SAR distribution** — the zip+layer model is the chosen path.
 - **Building additional ecosystems** (gym, etc.) — they are future apps on the library.
+- **The full Service-AID extension-point taxonomy / new extension points** — Phase B exposes the
+  EXISTING seams (compute, authz, contract, issuing, idempotency, runtime) as a clean documented API
+  and keeps the framework open; designing NEW extension points and the full "what implementing an AID
+  means" surface (lifecycle hooks, observability, delegation/governance, multi-credential policies, …)
+  is emergent — discovered while building ecosystems — and is its own future design effort.
 - **Mailbox long-poll cost/concurrency tuning** — Lambda bills wall-clock for the whole time an SSE
   long-poll is held open and pins one concurrency unit per open connection. A production mailbox may
   want an optional reserved-concurrency *ceiling* (to cap blast radius) and/or a shift to an API
