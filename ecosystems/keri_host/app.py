@@ -1,6 +1,7 @@
-"""CDK app: keri.host ecosystem — witness + mailbox only (no core table, no Service AID).
+"""CDK app: keri.host ecosystem — KeriCoreStack + witness + mailbox.
 
-Each stack owns its own Baser table ({name}-db). No KeriCoreStack dependency.
+The witness pools onto the shared KeriCoreStack table (LeadingKeys-scoped to its
+stack namespace). The mailbox still owns its own Baser table until Task 2.
 
 Synth without context (uses fallback defaults):
     python app.py
@@ -22,7 +23,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
 
 import aws_cdk as cdk
 
-from keri_cdk import WitnessStack, MailboxStack
+from keri_cdk import WitnessStack, MailboxStack, KeriCoreStack
 
 app = cdk.App()
 ctx = app.node.try_get_context
@@ -43,12 +44,15 @@ mailbox_name = ctx("mailbox_name") or "mailbox"
 # the stack default); lets a deploy pass a current published version.
 lwa_layer_arn = ctx("lwa_layer_arn")
 
+core = KeriCoreStack(app, "KeriHostCore", table_name="keri-core", env=env)
+
 WitnessStack(app, "KeriHostWitness",
              name=witness_name,
              alias="witness",
              domain_name=witness_domain,
              hosted_zone_id=hosted_zone_id,
              witness_url=f"https://{witness_domain}",
+             core_table=core.table,
              env=env)
 
 MailboxStack(app, "KeriHostMailbox",

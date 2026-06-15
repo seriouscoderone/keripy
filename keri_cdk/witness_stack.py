@@ -1,7 +1,7 @@
 """WitnessStack: deploys a KERI Witness as a zip+KeriRuntimeLayer Lambda.
 
 Translates ``sam-witness/template.yaml`` into CDK constructs:
-  - DynamoDB Baser table  ({name}-db, PK/SK + subdb-index GSI, PAY_PER_REQUEST)
+  - Shared DynamoDB core table (passed in as ``core_table``; LeadingKeys-scoped namespace)
   - KeriRuntimeLayer      (arm64 libsodium + keripy native deps)
   - Lambda Function       (python3.14, arm64, reserved_concurrent_executions=1)
   - Scoped Secrets Manager IAM policy
@@ -52,6 +52,7 @@ class WitnessStack(Stack):
         domain_name: str,
         hosted_zone_id: str,
         witness_url: str,
+        core_table: "ddb.ITable",
         keeper_secret: str | None = None,
         witnesses: list | None = None,  # unused at synth time; reserved for app config
         toad: int = 0,  # unused at synth time; reserved for app config
@@ -61,25 +62,6 @@ class WitnessStack(Stack):
         **kw,
     ):
         super().__init__(scope, cid, **kw)
-
-        # --- DynamoDB Baser table -----------------------------------------------
-        # Mirrors WitnessBaserTable in sam-witness/template.yaml.
-        # NOTE: PAY_PER_REQUEST, no RETAIN/deletion-protection — witness stacks
-        # may be torn down; operators should enable point-in-time-recovery manually
-        # for production.
-        self.baser = ddb.Table(
-            self,
-            "BaserTable",
-            table_name=f"{name}-db",
-            partition_key=ddb.Attribute(name="PK", type=ddb.AttributeType.STRING),
-            sort_key=ddb.Attribute(name="SK", type=ddb.AttributeType.STRING),
-            billing_mode=ddb.BillingMode.PAY_PER_REQUEST,
-        )
-        self.baser.add_global_secondary_index(
-            index_name="subdb-index",
-            partition_key=ddb.Attribute(name="gsi_pk", type=ddb.AttributeType.STRING),
-            sort_key=ddb.Attribute(name="gsi_sk", type=ddb.AttributeType.STRING),
-        )
 
         # --- Layer --------------------------------------------------------------
         layer_construct = runtime_layer or KeriRuntimeLayer(self, "Runtime")
@@ -108,7 +90,8 @@ class WitnessStack(Stack):
             environment={
                 "WITNESS_NAME": name,
                 "WITNESS_ALIAS": alias,
-                "WITNESS_BASER_TABLE": self.baser.table_name,
+                "WITNESS_BASER_TABLE": core_table.table_name,
+                "WITNESS_NAMESPACE": f"{Aws.STACK_NAME}:kel",  # consumed by the handler in Task 3
                 "WITNESS_KEEPER_SECRET": resolved_keeper_secret,
                 "WITNESS_REGION": Aws.REGION,
                 "WITNESS_URL": witness_url,
@@ -117,8 +100,31 @@ class WitnessStack(Stack):
             },
         )
 
-        # --- IAM: Baser DynamoDB CRUD ------------------------------------------
-        self.baser.grant_read_write_data(self.fn)
+        # --- IAM: Core (pooled) table — LeadingKeys-scoped to this stack's namespace only ---
+        self.fn.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "dynamodb:DescribeTable",
+                    "dynamodb:GetItem",
+                    "dynamodb:PutItem",
+                    "dynamodb:DeleteItem",
+                    "dynamodb:Query",
+                    "dynamodb:BatchWriteItem",
+                ],
+                resources=[
+                    core_table.table_arn,
+                    f"{core_table.table_arn}/index/*",
+                ],
+                conditions={
+                    "ForAllValues:StringLike": {
+                        "dynamodb:LeadingKeys": [
+                            f"{Aws.STACK_NAME}:*#*",
+                            f"__meta__#{Aws.STACK_NAME}:*",
+                        ]
+                    }
+                },
+            )
+        )
 
         # --- IAM: Secrets Manager (scoped to keri/<stack>/*) -------------------
         # Matches sam-witness/template.yaml Policies.Statement with
@@ -221,7 +227,7 @@ class WitnessStack(Stack):
             "WitnessApiGw",
             value=self.api.url,
         )
-        CfnOutput(self, "WitnessBaserTableName", value=self.baser.table_name)
+        CfnOutput(self, "WitnessNamespace", value=f"{Aws.STACK_NAME}:kel")
         CfnOutput(
             self,
             "WitnessKeeperSecret",
