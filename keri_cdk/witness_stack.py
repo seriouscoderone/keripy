@@ -10,6 +10,8 @@ Translates ``sam-witness/template.yaml`` into CDK constructs:
   - API GW custom domain  (REGIONAL)
   - Route53 A-record alias
 """
+import os
+
 from aws_cdk import (
     Stack,
     Duration,
@@ -36,7 +38,9 @@ _SM_ACTIONS = [
     "secretsmanager:PutSecretValue",
 ]
 
-_HANDLER_DIR = "keri_cdk/handlers/witness"
+# Absolute (dirname-based) so Code.from_asset resolves regardless of the cdk app's
+# CWD — e.g. `cdk deploy` from ecosystems/keri_host/. Mirrors service_aid.py.
+_HANDLER_DIR = os.path.join(os.path.dirname(__file__), "handlers", "witness")
 
 
 class WitnessStack(Stack):

@@ -26,6 +26,8 @@ LWA wiring (the documented LWA zip exec-wrapper pattern):
     Runtime API endpoint (pairs with API GW ResponseTransferMode.STREAM).
   - ``AWS_LWA_PORT=8080`` / ``AWS_LWA_READINESS_CHECK_PATH=/status``.
 """
+import os
+
 from aws_cdk import (
     Stack,
     Duration,
@@ -52,7 +54,9 @@ _SM_ACTIONS = [
     "secretsmanager:PutSecretValue",
 ]
 
-_HANDLER_DIR = "keri_cdk/handlers/mailbox"
+# Absolute (dirname-based) so Code.from_asset resolves regardless of the cdk app's
+# CWD — e.g. `cdk deploy` from ecosystems/keri_host/. Mirrors service_aid.py.
+_HANDLER_DIR = os.path.join(os.path.dirname(__file__), "handlers", "mailbox")
 
 # AWS Lambda Web Adapter is published by AWS account 753240598075. The arm64
 # layer name is ``LambdaAdapterLayerArm64``. The version MUST be a CURRENT one
