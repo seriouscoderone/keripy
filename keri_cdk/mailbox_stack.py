@@ -114,7 +114,10 @@ class MailboxStack(Stack):
         self.fn = _lambda.Function(
             self,
             "MailboxFunction",
-            function_name=f"{name}-handler",
+            # Name from the (account-unique) stack name, not `name`, so a temp/parallel
+            # deploy never collides with another stack's function (e.g. the live SAM
+            # `mailbox-handler`). Stack names are guaranteed unique per account/region.
+            function_name=f"{Aws.STACK_NAME}-handler",
             runtime=_lambda.Runtime.PYTHON_3_14,
             architecture=_lambda.Architecture.ARM_64,
             handler="run.sh",
