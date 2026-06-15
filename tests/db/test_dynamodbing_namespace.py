@@ -109,3 +109,33 @@ def test_clear_store_is_namespace_scoped():
         b.close()
         named.close()
         a.close()
+
+
+@needs_moto
+def test_witness_mailbox_reger_namespaces_isolated_on_one_table():
+    """Witness (:kel), mailbox (:mbx) and a Service-AID Reger (:tel) namespaces on the
+    SAME core table read only their own rows — the Phase C per-service isolation."""
+    with mock_aws():
+        wit = DynamoDBer.open(name="witness", stores=["kels."], region="us-east-1",
+                              table_name="keri-core", namespace="KeriHostWitness:kel")
+        mbx = DynamoDBer.open(name="mailbox", stores=["kels."], region="us-east-1",
+                              table_name="keri-core", namespace="KeriHostMailbox:mbx")
+        reg = DynamoDBer.open(name="gated", stores=["kels."], region="us-east-1",
+                              table_name="keri-core", namespace="gated:tel")
+        wsub = wit.env.open_db(b"kels.")
+        msub = mbx.env.open_db(b"kels.")
+        rsub = reg.env.open_db(b"kels.")
+        wit.setVal(wsub, b"AID", b"witness-row")
+        mbx.setVal(msub, b"AID", b"mailbox-row")
+        reg.setVal(rsub, b"AID", b"reger-row")
+        # Same subdb + same key, three namespaces — each isolated.
+        assert wit.getVal(wsub, b"AID") == b"witness-row"
+        assert mbx.getVal(msub, b"AID") == b"mailbox-row"
+        assert reg.getVal(rsub, b"AID") == b"reger-row"
+        # A key written only in the witness namespace is invisible to the others.
+        wit.setVal(wsub, b"WITONLY", b"secret")
+        assert mbx.getVal(msub, b"WITONLY") is None
+        assert reg.getVal(rsub, b"WITONLY") is None
+        wit.close()
+        mbx.close()
+        reg.close()
