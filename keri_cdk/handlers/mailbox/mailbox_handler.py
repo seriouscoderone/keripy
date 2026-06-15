@@ -31,6 +31,12 @@ import falcon.asgi
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+
+def _namespace(name):
+    """Pooled-table namespace for this mailbox (env-driven; defaults to '{name}:mbx')."""
+    return os.environ.get("MAILBOX_NAMESPACE") or f"{name}:mbx"
+
+
 # Module-level singletons (warm across Lambda invocations)
 _hby = None
 _hab = None
@@ -184,7 +190,7 @@ def init():
     # Baser + Mailboxer share a table (non-overlapping subkeys)
     baser_and_mbx_stores = list(set(BASER_STORES + MAILBOXER_STORES))
     db = DynamoDBer.open(name=name, stores=baser_and_mbx_stores,
-                         table_name=baser_table, **kwa)
+                         table_name=baser_table, namespace=_namespace(name), **kwa)
     setup_baser(db)
     setup_mailboxer(db)
 

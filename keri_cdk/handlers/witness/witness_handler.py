@@ -20,6 +20,12 @@ except Exception:  # pragma: no cover - host/test envs without bootstrap on path
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+
+def _namespace(name):
+    """Pooled-table namespace for this witness (env-driven; defaults to '{name}:kel')."""
+    return os.environ.get("WITNESS_NAMESPACE") or f"{name}:kel"
+
+
 # Module-level singletons (warm across Lambda invocations)
 _hby = None
 _hab = None
@@ -92,7 +98,8 @@ def init():
     # so we no longer attach Mailboxer subdatabases here. (DynamoDB table
     # still has any prior mbx-related keys from before the strip; harmless,
     # they're never read by this handler now.)
-    db = DynamoDBer.open(name=name, stores=BASER_STORES, table_name=baser_table, **kwa)
+    db = DynamoDBer.open(name=name, stores=BASER_STORES, table_name=baser_table,
+                         namespace=_namespace(name), **kwa)
     setup_baser(db)
 
     # Keeper: one KMS-encrypted secret per stack (NOT a DynamoDB -ks table).
