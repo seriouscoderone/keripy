@@ -1,7 +1,7 @@
 """CDK app: keri.host ecosystem — KeriCoreStack + witness + mailbox.
 
-The witness pools onto the shared KeriCoreStack table (LeadingKeys-scoped to its
-stack namespace). The mailbox still owns its own Baser table until Task 2.
+Both witness and mailbox pool onto the shared KeriCoreStack table (LeadingKeys-scoped
+to their respective stack namespaces: kel for witness, mbx for mailbox).
 
 Synth without context (uses fallback defaults):
     python app.py
@@ -34,9 +34,8 @@ witness_domain = ctx("witness_domain") or "witness.example.com"
 mailbox_domain = ctx("mailbox_domain") or "mailbox.example.com"
 hosted_zone_id = ctx("hosted_zone_id") or "Z000000000000000"
 
-# Table names ({name}-db) are context-overridable so a parallel/temporary
-# deploy can use distinct names (e.g. wit/mbox) without colliding with a live
-# witness-db/mailbox-db. Defaults unchanged so synth tests stay green.
+# Service names (used as the Lambda function-name / REST API-name prefix).
+# Override via -c flags for parallel/temporary deploys (e.g. witness-b/mailbox-b).
 witness_name = ctx("witness_name") or "witness"
 mailbox_name = ctx("mailbox_name") or "mailbox"
 
@@ -61,6 +60,7 @@ MailboxStack(app, "KeriHostMailbox",
              domain_name=mailbox_domain,
              hosted_zone_id=hosted_zone_id,
              mailbox_url=f"https://{mailbox_domain}",
+             core_table=core.table,
              lwa_layer_arn=lwa_layer_arn,
              env=env)
 

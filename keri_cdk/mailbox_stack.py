@@ -3,8 +3,8 @@ KeriRuntimeLayer + the AWS Lambda Web Adapter layer) running the Falcon ASGI
 app under uvicorn, with native API-Gateway response streaming.
 
 Translates ``sam-mailbox/template.yaml`` into CDK constructs:
-  - DynamoDB Baser table       ({name}-db, PK/SK + subdb-index GSI, PAY_PER_REQUEST;
-                                shared baser + mailboxer stores)
+  - Shared DynamoDB core table (passed in as ``core_table``; LeadingKeys-scoped to
+                                the ``{STACK_NAME}:mbx`` namespace)
   - KeriRuntimeLayer           (arm64 libsodium + keripy native deps)
   - AWS Lambda Web Adapter      (arm64 layer; provides /opt/bootstrap exec-wrapper
                                 + the localhost->Lambda streaming sidecar)
@@ -83,6 +83,7 @@ class MailboxStack(Stack):
         domain_name: str,
         hosted_zone_id: str,
         mailbox_url: str,
+        core_table: "ddb.ITable",
         witness_aid: str = "",
         witness_url: str = "",
         keeper_secret: str | None = None,
@@ -92,24 +93,6 @@ class MailboxStack(Stack):
         **kw,
     ):
         super().__init__(scope, cid, **kw)
-
-        # --- DynamoDB Baser table -----------------------------------------------
-        # Mirrors MailboxBaserTable in sam-mailbox/template.yaml: Baser +
-        # Mailboxer share this table (non-overlapping subkeys). PK/SK +
-        # subdb-index GSI (gsi_pk/gsi_sk), PAY_PER_REQUEST.
-        self.baser = ddb.Table(
-            self,
-            "BaserTable",
-            table_name=f"{name}-db",
-            partition_key=ddb.Attribute(name="PK", type=ddb.AttributeType.STRING),
-            sort_key=ddb.Attribute(name="SK", type=ddb.AttributeType.STRING),
-            billing_mode=ddb.BillingMode.PAY_PER_REQUEST,
-        )
-        self.baser.add_global_secondary_index(
-            index_name="subdb-index",
-            partition_key=ddb.Attribute(name="gsi_pk", type=ddb.AttributeType.STRING),
-            sort_key=ddb.Attribute(name="gsi_sk", type=ddb.AttributeType.STRING),
-        )
 
         # --- Layers: KeriRuntimeLayer + AWS Lambda Web Adapter ------------------
         runtime_construct = runtime_layer or KeriRuntimeLayer(self, "Runtime")
@@ -148,7 +131,8 @@ class MailboxStack(Stack):
                 # ---- Mailbox app config ----------------------------------------
                 "MAILBOX_NAME": name,
                 "MAILBOX_ALIAS": alias,
-                "MAILBOX_BASER_TABLE": self.baser.table_name,
+                "MAILBOX_BASER_TABLE": core_table.table_name,
+                "MAILBOX_NAMESPACE": f"{Aws.STACK_NAME}:mbx",  # consumed by the handler in Task 3
                 "MAILBOX_KEEPER_SECRET": resolved_keeper_secret,
                 "MAILBOX_REGION": Aws.REGION,
                 "MAILBOX_ENDPOINT_URL": "",
@@ -160,8 +144,31 @@ class MailboxStack(Stack):
             },
         )
 
-        # --- IAM: Baser DynamoDB CRUD ------------------------------------------
-        self.baser.grant_read_write_data(self.fn)
+        # --- IAM: Core (pooled) table — LeadingKeys-scoped to this stack's namespace only ---
+        self.fn.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "dynamodb:DescribeTable",
+                    "dynamodb:GetItem",
+                    "dynamodb:PutItem",
+                    "dynamodb:DeleteItem",
+                    "dynamodb:Query",
+                    "dynamodb:BatchWriteItem",
+                ],
+                resources=[
+                    core_table.table_arn,
+                    f"{core_table.table_arn}/index/*",
+                ],
+                conditions={
+                    "ForAllValues:StringLike": {
+                        "dynamodb:LeadingKeys": [
+                            f"{Aws.STACK_NAME}:*#*",
+                            f"__meta__#{Aws.STACK_NAME}:*",
+                        ]
+                    }
+                },
+            )
+        )
 
         # --- IAM: Secrets Manager (scoped to keri/<stack>/*) -------------------
         self.fn.add_to_role_policy(
@@ -241,5 +248,5 @@ class MailboxStack(Stack):
         # --- Outputs ------------------------------------------------------------
         CfnOutput(self, "MailboxUrl", value=mailbox_url)
         CfnOutput(self, "MailboxApiGw", value=self.api.url)
-        CfnOutput(self, "MailboxBaserTableName", value=self.baser.table_name)
+        CfnOutput(self, "MailboxNamespace", value=f"{Aws.STACK_NAME}:mbx")
         CfnOutput(self, "MailboxKeeperSecret", value=resolved_keeper_secret)
