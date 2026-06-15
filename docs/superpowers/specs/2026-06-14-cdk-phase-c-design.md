@@ -1,121 +1,80 @@
-# CDK Phase C: Shared Public KEL Pool + Scoped Credential Tier on One Core Table — Design
+# CDK Phase C: Consolidate All KERI Services onto One Core Table (per-service isolation) — Design
 
-**Date:** 2026-06-14 (revised 2026-06-15 — re-scoped around the shared-KEL-oracle insight)
+**Date:** 2026-06-14 (revised 2026-06-15 — settled on the proven isolation model; shared-KEL oracle deferred)
 **Status:** Approved (brainstorm complete; ready for implementation plan)
 **Repo:** keripy fork, branch `feat/cdk-phase-c` (off `development`)
 **Predecessors:** Phase A (DynamoDB concurrent-append hardening, `b2255ff1`); Phase B (SAM→CDK `keri_cdk` library, `a9d11b54`)
 
 ## Goal
 
-Make every KERI service in a single trust domain — witness, mailbox, and every
-Service-AID — share **one** `KeriCoreStack` DynamoDB table, with the **public KEL** in a
-single shared namespace that acts as a trust-domain-wide **key-state oracle**, and the only
-confidential data — **ACDC credential bodies** — kept in a per-service scoped namespace. Stop
-fragmenting public, verifiable key state across schema-identical per-service tables; isolate
-exactly (and only) what is actually confidential.
+Put every KERI service in a trust domain — witness, mailbox, and every Service-AID — on **one**
+`KeriCoreStack` DynamoDB table, each in its **own** `dynamodb:LeadingKeys`-isolated namespace.
+This is the Service-AID multi-tenant pattern Phase B already validated on real AWS, extended to
+the witness and mailbox. It removes the schema-identical duplicate per-service tables and improves
+durability, while keeping every service cryptographically and operationally isolated. The
+**shared-KEL "key-state oracle" is deliberately deferred** to a focused follow-on (see below).
 
-## Why (the driver)
+## Why (the driver) + why isolation, not sharing (yet)
 
-Two reinforcing reasons:
+**Cleanliness:** the per-service tables have identical schema/purpose; duplicating them inside one
+operator's account/region/ecosystem isolates nothing and is confusing. One table per trust domain
+(separate operators already get separate `KeriCoreStack`s via the distributable library) + better
+durability (the core table has RETAIN + deletion/termination protection + PITR; per-service tables
+have none).
 
-1. **Architectural cleanliness within a trust domain.** The per-service tables have the exact
-   same schema and purpose; duplicating them inside one operator's account/region/ecosystem is
-   confusing and isolates nothing — they're all the same operator. The boundary that matters is
-   *between* trust domains, and that's already enforced: the distributable `keri_cdk` library is
-   deployed once per ecosystem, so separate operators get separate `KeriCoreStack` tables.
+**Why per-service isolation rather than a shared KEL pool — settled by research (2026-06-15):**
 
-2. **The KEL is public, and fragmenting it is wasteful.** A single KERI node already keeps one
-   database holding every AID's KEL it has observed, keyed by AID prefix. Per-service
-   namespacing fragments that — each service only benefits from counterparties *it* resolved.
-   Un-fragmenting the public KEL turns the shared table into a **key-state oracle**: any
-   counterparty validated by *any* service (witness, mailbox, Service-AID) is instantly
-   available to all — no re-OOBI, no re-fetch from witnesses, no re-validation from inception —
-   and it strengthens duplicity detection (one shared "first-seen" view).
+- **keria, the production multi-tenant KERI system, deliberately chose strict per-tenant
+  isolation** — one `Habery`+`Baser`+`Keeper` per controller AID, no cross-tenant KEL sharing, no
+  shared cache (`keria/src/keria/app/agenting.py:141-165,253-333`; the only shared store is routing
+  metadata, `keria/src/keria/db/basing.py:29-103`). It is the battle-tested model.
+- **The shared-KEL oracle is genuinely novel** — there is no prior art to copy, and it would
+  require a new `DynamoDBer` capability (per-store namespace routing); see "Deferred" below.
+- **YAGNI:** the oracle's payoff (services skipping counterparty re-resolution) only materializes
+  once real verifying Service-AIDs exist — none are deployed yet.
+- **B → A is additive, not a rework:** the oracle layers a per-store split on top of this same
+  one-table foundation; KEL is regenerable (keripy `Baser.clean()` replays it), and the oracle is
+  best built *before* the real production cutover, so there is no data migration either way.
 
 ## Research foundation (verified)
 
-Confirmed against the KERI/ACDC specs (`kswg-acdc-specification`, `kswg-keri-specification`),
-the keri.host RAG, and the keripy / keria / signify codebases:
+Confirmed against the KERI/ACDC specs, the keri.host RAG, and the keripy/keria/signify codebases:
 
-- **KELs are public by design — no confidentiality requirement.** They hold only public keys,
-  config, and digests/seals. KERI is end-verifiable with ambient verifiability.
-- **KERI assumes untrusted storage.** "A corrupted store cannot inject forged events…
-  corruption can only cause denial of service, not acceptance of invalid state." So a shared
-  KEL store cannot cause a service to accept a forged event — and even shared *write* access is
-  only a DoS risk (detectable + recoverable), not a forgery risk.
-- **Caching counterparty KELs is the standard KERI operational model** — "First Seen Policy"
-  and duplicity detection depend on it.
-- **The only confidential data is the ACDC attribute body** (the `a`/`A` section — the values
-  filled against a schema). It lives in exactly one durable store: keripy's **`Reger.creds.`**
-  (`vdr/eventing.py:2400,2560`), keyed by credential SAID; transient copies in `cmse.`/`ccrd.`.
-  The **Baser/KEL holds zero credential bodies**; the registry **TEL holds only digests/state**.
-- **A verifier has no obligation to persist the body** — *verify-and-discard* is the documented
-  production pattern (GLEIF/sally). The current keri_cdk Service-AID already discards
-  (`handlers/serviceaid/handler.py:157`, `credentials=[]`, extraction not wired).
-- **Witness and mailbox never hold credential bodies** (no Reger). In keria, bodies are
-  agent-held, plaintext, per-controller-AID isolated; the Signify client is stateless about
-  bodies. The real secret everywhere is *key material*, which lives in the keeper (Secrets
-  Manager), never in this table.
-
-**Conclusion:** the public/private line is crisp — KEL = public (share it, no read boundary);
-ACDC credential bodies in the `Reger` = the one place a per-service IAM boundary protects real
-confidentiality.
+- **KELs are public** (ambient verifiability); **KERI assumes untrusted storage** — a corrupted/
+  shared store can only DoS, never cause acceptance of a forged event. (This is *why* a future
+  shared KEL pool is safe — but see "Deferred" for why it isn't this phase.)
+- **The only confidential data is the ACDC attribute body**, stored in keripy's `Reger.creds.`
+  (`vdr/eventing.py:2400,2560`); the Baser/KEL holds **zero** bodies; the TEL holds only digests.
+  Because each service's Reger lives in that service's own namespace here, **credential-body
+  confidentiality is automatic** under per-service isolation — no special handling needed.
+- **A verifier verify-and-discards** (the current Service-AID already does:
+  `handlers/serviceaid/handler.py:157`, `credentials=[]`). **Witness/mailbox have no Reger.**
+- **The real secret is key material in the keeper** (Secrets Manager), never in this table.
 
 ## The boundary rule
 
-**One `KeriCoreStack` table per trust domain.** Within it:
-
-- **Shared public KEL pool** — one shared namespace (`shared`) for the Baser of *every* service.
-  Holds every AID's KEL (own + observed), keyed by AID prefix. No per-service read boundary.
-- **Per-service scoped credential tier** — each service that issues/holds credentials keeps its
-  `Reger` (credential bodies + TEL) in a per-service namespace (`<id>:reg`), `LeadingKeys`-locked.
-  Witness/mailbox have no Reger, so no private tier.
-
-Across trust domains, separate `keri_cdk` deployments → separate core tables.
-
-Pooling also *improves* durability: the core table has RETAIN + deletion/termination protection
-+ PITR (`core_stack.py:24-31`); the per-service witness/mailbox tables deliberately have none.
+One `KeriCoreStack` table per trust domain. Within it, **each service gets its own namespace**,
+`LeadingKeys`-locked so a service can touch only its own rows. No cross-service sharing. Separate
+trust domains → separate tables (already enforced by the per-deployment library model).
 
 ## Identity & namespace convention
 
-| Service | Baser (KEL) namespace | Reger (credential) namespace | keeper |
+The **stack name** is the isolation unit for whole-stack services (already the keeper key:
+`keri/{Aws.STACK_NAME}/keeper`). The Service-AID keeps its `alias` (it's a `Construct`, possibly
+many per stack; `alias`-vs-stack-name collapse is deferred — memory `project_service_aid_alias_vs_stackname`).
+
+| Service | namespace(s) | keeper | LeadingKeys |
 |---|---|---|---|
-| Witness | `shared` | — (no Reger) | `keri/<stack-name>/keeper` |
-| Mailbox | `shared` | — (no Reger) | `keri/<stack-name>/keeper` |
-| Watcher (future) | `shared` | — | `keri/<stack-name>/keeper` |
-| Service-AID | `shared` (was `<alias>:kel`) | `<alias>:reg` (was `<alias>:tel`) | `keri/<alias>/keeper` |
+| Witness | `<stack-name>:kel` | `keri/<stack-name>/keeper` | `<stack-name>:*#*`, `__meta__#<stack-name>:*` |
+| Mailbox | `<stack-name>:mbx` | `keri/<stack-name>/keeper` | `<stack-name>:*#*`, `__meta__#<stack-name>:*` |
+| Watcher (future) | `<stack-name>:kel` | `keri/<stack-name>/keeper` | `<stack-name>:*#*`, `__meta__#<stack-name>:*` |
+| Service-AID | `<alias>:kel` + `<alias>:tel` **(unchanged)** | `keri/<alias>/keeper` | `<alias>:*#*`, `__meta__#<alias>:*` **(unchanged)** |
 
-Keys are `{namespace}#{subdb}#{hex(key)}` (`dynamodbing.py:354`); GSI partition `{namespace}#{subdb}`
-(`:358`). The shared pool uses namespace `shared`; the credential tier uses the service identity
-(stack name for whole-stack services, `alias` for the Service-AID). `<id>:reg` carries exactly
-the one colon we add (CFN stack names and the alias are `[A-Za-z0-9-]`, no `:`/`#`).
-
-**IAM (`dynamodb:LeadingKeys`, `ForAllValues:StringLike`):**
-
-- **All services** get the shared-KEL grant: `["shared#*", "__meta__#shared#*"]`.
-- **Services with a Reger** (Service-AID) additionally get: `["<id>:reg#*", "__meta__#<id>:reg#*"]`.
-
-This is principled: a witness/mailbox role can touch *only* the shared KEL pool and can read
-**no** credential bodies; a Service-AID can touch the shared pool **and its own** Reger, but
-**not another service's** Reger (durable bodies stay confidential). A single DynamoDBer operation
-never spans both namespaces (Baser and Reger are separate opens), so the `ForAllValues` union is
-correct — the same shape `service_aid.py:202-225` already uses.
-
-The keeper stays per-service in Secrets Manager — the real secret, untouched. **AID identity is
-determined by the keeper salt/bran, not the namespace**, so repointing tables never changes an
-AID. This also finishes the alias story: the Service-AID's `alias` now scopes *only* its private
-Reger + keeper — never the shared KEL. (Whether `alias` collapses into the stack name remains the
-micro-app-runtime decision — memory `project_service_aid_alias_vs_stackname`.)
-
-### Accepted trade-off (documented)
-
-Sharing the *whole* Baser means a service's transient `Baser.exns` (IPEX envelopes, which can
-carry an inline ACDC body in transit) and the mailbox's in-transit `Mailboxer` messages ride in
-the `shared` pool, readable by other roles in the **same trust domain** (same operator). This is
-accepted: it is transient, same-operator, defense-in-depth-only data, and the **durable**
-confidential store (`Reger.creds`) is properly scoped. A finer **per-store namespace split**
-(share public KEL + TEL state; scope `exns`/messages/bodies) is a clean future refinement — it
-needs a small `DynamoDBer` enhancement (per-store namespace routing) and is **out of scope** here.
+Keys are `{namespace}#{subdb}#{hex(key)}` (`dynamodbing.py:354`); GSI partition `{namespace}#{subdb}`.
+This is byte-for-byte the layout the LeadingKeys probe verified on real AWS. CFN stack names and the
+alias are `[A-Za-z0-9-]` (no `:`/`#`), so `<id>:kel` carries exactly the one colon we add and matches
+`<id>:*#*` cleanly. **AID identity = keeper salt/bran, not the namespace**, so repointing the table
+never changes an AID.
 
 ## Component changes (file by file)
 
@@ -123,128 +82,120 @@ needs a small `DynamoDBer` enhancement (per-store namespace routing) and is **ou
 - **Remove** the self-owned `ddb.Table` (`:70-82`). Add required `core_table: ddb.ITable`
   (cross-stack ref emits the CFN Export/`Fn::ImportValue` lifecycle lock).
 - **Replace** `self.baser.grant_read_write_data(self.fn)` (`:121`) with the LeadingKeys-scoped
-  policy over `core_table.table_arn` + `/index/*`, conditioned on the **shared-KEL grant**
-  `["shared#*", "__meta__#shared#*"]` (actions `DescribeTable/GetItem/PutItem/DeleteItem/Query/BatchWriteItem`).
-- **Env:** `WITNESS_BASER_TABLE = core_table.table_name`; add `WITNESS_NAMESPACE = "shared"`.
-- Keep `reserved_concurrent_executions=1`. Drop the misleading `WitnessBaserTableName` CfnOutput;
-  add `WitnessNamespace`.
+  policy mirroring `service_aid.py:202-225`: actions `DescribeTable/GetItem/PutItem/DeleteItem/Query/
+  BatchWriteItem` over `core_table.table_arn` + `/index/*`, conditioned on `ForAllValues:StringLike`
+  → `dynamodb:LeadingKeys: ["{Aws.STACK_NAME}:*#*", "__meta__#{Aws.STACK_NAME}:*"]`.
+- **Env:** `WITNESS_BASER_TABLE = core_table.table_name`; add `WITNESS_NAMESPACE = f"{Aws.STACK_NAME}:kel"`.
+- Keep `reserved_concurrent_executions=1`. Drop the misleading `WitnessBaserTableName` CfnOutput; add `WitnessNamespace`.
 
 ### `keri_cdk/mailbox_stack.py`
-- Same shape: `core_table` param, remove own table (`:100-112`), swap `grant_read_write_data`
-  (`:164`) for the shared-KEL LeadingKeys policy, env `MAILBOX_BASER_TABLE = core_table.table_name`
-  + `MAILBOX_NAMESPACE = "shared"`. Keep no reserved-concurrency, both layers, `ResponseTransferMode.STREAM`.
-  Drop `MailboxBaserTableName` output; add `MailboxNamespace`.
-
-### `keri_cdk/service_aid.py`
-- **Broaden the IAM** to the two-grant union above (`["shared#*", "__meta__#shared#*",
-  "<alias>:reg#*", "__meta__#<alias>:reg#*"]`) — replacing the current `["{alias}:*#*",
-  "__meta__#{alias}:*"]` (`:218`). This is the only change here; the namespaces themselves are
-  derived in `config.py` (next section), and `SERVICEAID_ALIAS`/`SERVICEAID_CORE_TABLE` env are
-  already passed, so no new env var is needed.
-- Keeper IAM, reserved-concurrency=1, inception CR, cross-stack lock: unchanged.
-
-### `keri_cdk/handlers/serviceaid/config.py`
-- `kel_namespace` → returns the shared constant `"shared"` (was `f"{alias}:kel"`).
-- `tel_namespace` → returns `f"{alias}:reg"` (was `f"{alias}:tel"`).
-- (These are read by `runtime.py:130-136`, which already opens `db` and `reger` separately.)
+- Same shape: `core_table` param, remove own table (`:100-112`), swap `grant_read_write_data` (`:164`)
+  for the LeadingKeys policy, env `MAILBOX_BASER_TABLE = core_table.table_name` +
+  `MAILBOX_NAMESPACE = f"{Aws.STACK_NAME}:mbx"`. Keep no reserved-concurrency, both layers,
+  `ResponseTransferMode.STREAM`. Drop `MailboxBaserTableName` output; add `MailboxNamespace`.
 
 ### `keri_cdk/handlers/witness/witness_handler.py`
-- Read `WITNESS_NAMESPACE` (default `"shared"`); pass `namespace=` into `DynamoDBer.open(...)`
+- Read `WITNESS_NAMESPACE` (default `f"{name}:kel"`); pass `namespace=` into `DynamoDBer.open(...)`
   (`:95`). Review the destroy-replace comment at `:46` (the table is no longer destroyed with the
   stack — it's RETAIN in another stack); the reload-or-reincept cold-start path stays correct.
 
 ### `keri_cdk/handlers/mailbox/mailbox_handler.py`
-- Read `MAILBOX_NAMESPACE` (default `"shared"`); pass `namespace=` into `DynamoDBer.open(...)` (`:186`).
+- Read `MAILBOX_NAMESPACE` (default `f"{name}:mbx"`); pass `namespace=` into `DynamoDBer.open(...)` (`:186`).
 
 ### `keri_cdk/watcher_stack.py`
-- Update the seam signature to accept `core_table: ddb.ITable`; document it pools its Baser into
-  `shared` from birth with the shared-KEL grant. Stays `NotImplementedError`.
+- Update the seam signature to accept `core_table: ddb.ITable`; document it uses
+  `<stack-name>:kel` + the same LeadingKeys grant. Stays `NotImplementedError`.
 
 ### `ecosystems/keri_host/app.py`
 - Add `core = KeriCoreStack(app, "KeriHostCore", env=env)`; pass `core_table=core.table` to both
   stacks; `add_dependency(core)`. Remove the `witness_name`/`mailbox_name` *table-name* context.
-  Stack ids `KeriHostWitness`/`KeriHostMailbox` are the stack names (used for keeper paths).
+  Stack ids `KeriHostWitness`/`KeriHostMailbox` are the stack names (keeper + namespace prefix).
 
-### `examples/gated_retrieval/app.py` + handler
-- No structural change (it already composes `KeriCoreStack` + `ServiceAid`); it inherits the new
-  shared-KEL / scoped-Reger behavior. Add a note that the gated example, as a *verifier*, holds no
-  credential bodies; the `gated-record` it *issues* is the only thing in its scoped Reger.
-
-### No change
-- `core_stack.py` (already hardened), `src/keri/db/dynamodbing.py` (the existing `namespace=` param
-  is sufficient; the per-store split is the deferred refinement).
+### NO change
+- **`keri_cdk/service_aid.py` + `handlers/serviceaid/config.py`** — the Service-AID already pools
+  per-service (`<alias>:kel`/`<alias>:tel`, LeadingKeys `<alias>:*#*`). It is already conformant; do
+  not touch it. (Its `tel`/Reger namespace already gives credential-body confidentiality.)
+- **`core_stack.py`** (already hardened) and **`src/keri/db/dynamodbing.py`** (the existing
+  `namespace=` param is all B needs).
 
 ## Data flow & cutover (no migration)
 
 Nothing CDK-side is live (federation still on SAM; Phase-B temp witness torn down; no `keri-core`
-table in `personal`). Phase C is a **library change**, not a data operation. Runtime flow:
-handler cold start → `DynamoDBer.open(table_name=<core-table>, namespace="shared")` for the Baser
-(and `namespace="<alias>:reg"` for the Service-AID Reger) → KEL rows land in the shared pool, the
-Service-AID's credential bodies land in its scoped Reger. GSI iteration / point-reads / appends
-are byte-identical to today; only the PK prefix and physical table differ.
-
-**Land Phase C before the real SAM→CDK cutover.** Then the cutover (separate, deliberate,
-user-triggered) brings everything up already pooled: deploy `KeriCoreStack` → deploy
-witness/mailbox/Service-AIDs pointed at `core.table` → preserved keeper secrets reproduce the same
-AIDs → tear down SAM. No "unpooled then migrate" state ever exists.
+table in `personal`). Phase C is a **library change**. Runtime flow: handler cold start →
+`DynamoDBer.open(table_name=<core-table>, namespace="<id>:kel|mbx")` → rows land under that prefix on
+the shared table; GSI iteration / point-reads / appends byte-identical to today. Land Phase C before
+the real SAM→CDK cutover; the cutover then brings everything up already pooled (preserved keeper
+secrets reproduce the same AIDs). No "unpooled then migrate" state ever exists.
 
 ## Edge cases & error handling
 
-- **Cross-service concurrent writes to the shared KEL.** Multiple services write the shared
-  `shared#*` keyspace (own KEL + observed counterparties). Same-AID concurrent appends are
-  hardened by Phase A's `appendOnVal`/`addIoSetVal` retry (`b2255ff1`). Distinct AIDs hit distinct
-  PKs. Per untrusted-storage, a buggy/compromised writer can at worst DoS a row (recoverable from
-  witnesses), never forge an accepted event.
-- **Shared meta / DB version.** All services open the `shared` namespace, sharing meta rows
-  (`__meta__#shared#<store>`, keyed by namespace+store, not instance name). Concurrent idempotent
-  version writes; all services run the same keripy version.
 - **`DescribeTable` vacuous-allow.** `DynamoDBer.open → _ensure_table` calls `describe_table`
-  unconditionally; no item keys, so vacuously allowed under LeadingKeys — but it MUST be in the
-  action list or every cold start `AccessDenied`s.
+  unconditionally (no item keys → vacuously allowed under LeadingKeys), but it MUST be in the action
+  list or every cold start `AccessDenied`s.
 - **Shared `__meta__` GSI partition.** keripy writes meta with literal `gsi_pk="__meta__"` but
-  point-`GetItem`s it by PK; the `__meta__#<ns>` LeadingKeys patterns scope it correctly (probe
+  point-`GetItem`s it by PK `__meta__#{namespace}#{store}`; `__meta__#<id>:*` scopes it (probe
   confirmed cross-tenant meta GSI `Query` denied).
-- **In-domain transient exposure.** Per the accepted trade-off: transient `exns` + mailbox
-  messages ride in the shared pool. Durable confidential bodies (`Reger.creds`) are scoped.
-- **Destroy-replace / orphaned data.** Core table is protected + in its own stack behind the
-  cross-stack lock; destroying a service stack never touches it. Orphaned rows (shared KEL is a
-  growing cache — a feature; scoped Reger of a decommissioned service) are cleaned manually if
-  desired (DynamoDBer clear-namespace).
+- **Mailbox concurrency.** Mailbox has no reserved-concurrency → concurrent writers within its own
+  namespace; Phase A's `appendOnVal`/`addIoSetVal` retry (`b2255ff1`) hardens that. Distinct services
+  are distinct namespaces → no contention.
+- **Destroy-replace / orphaned namespaces.** Core table is protected + in its own stack behind the
+  cross-stack lock; destroying a service stack never touches it. Orphaned namespaced rows of a
+  decommissioned service are cleaned manually if desired (DynamoDBer clear-namespace).
+- **Namespace safety.** Stack names/alias exclude `:`/`#`, so `<id>:kel` matches `<id>:*#*` cleanly.
 
 ## Testing & validation
 
 ### CDK assertions (`tests/cdk/`, `aws_cdk.assertions.Template`)
 - WitnessStack/MailboxStack create **zero** `AWS::DynamoDB::Table`.
-- Witness/mailbox IAM carries the **shared-KEL** LeadingKeys grant only (`shared#*`, `__meta__#shared#*`);
-  Service-AID IAM carries the **two-grant union** (shared + `<alias>:reg#*`).
-- Env carries `*_NAMESPACE = "shared"` (witness/mailbox) and `*_BASER_TABLE` via `Fn::ImportValue`.
+- Each carries the per-service LeadingKeys condition with its `<stack-name>` patterns.
+- Env carries `*_NAMESPACE` (`<id>:kel`/`<id>:mbx`) and `*_BASER_TABLE` via `Fn::ImportValue`.
 - Witness reserved-conc=1; mailbox none + `ResponseTransferMode.STREAM`; the KeriCore↔consumer
   Export/`Fn::ImportValue` lock present; the `keri_host` app has one core table, no per-service tables.
+- **Update the now-obsolete tests** that assert per-service tables: `test_witness_stack.py::test_witness_owns_baser_table_with_gsi`,
+  `test_keri_host_app.py::{test_keri_host_is_witness_plus_mailbox_no_core,test_witness_baser_table_name,test_mailbox_baser_table_name}`,
+  and the `MailboxStack` equivalents — they assert behavior this phase removes.
 
-### Handler unit tests (`tests/handlers/`, moto)
-- Witness/mailbox pass `namespace="shared"` to `DynamoDBer.open`; Service-AID passes `"shared"`
-  (Baser) and `"<alias>:reg"` (Reger).
-- **Oracle test:** a witness writes an AID's KEL into the shared namespace; a *separate* Service-AID
-  instance opened on the same moto table reads that AID's key state from the shared pool without
-  re-resolution. This is the headline behavioral proof.
-- **Confidentiality test:** a Service-AID's issued credential lands only under `<alias>:reg`, never
-  under `shared` (moto won't enforce IAM, but proves the namespacing routes bodies correctly).
+### Handler / DB unit tests
+- Witness/mailbox pass `namespace=` to `DynamoDBer.open` (assert via the env-driven default).
+- **Isolation test** (extend `tests/db/test_dynamodbing_namespace.py`, mirroring
+  `test_two_namespaces_in_one_table_are_isolated`): a witness namespace and a mailbox namespace and a
+  `<alias>:tel` Reger namespace on one moto table do not collide — each reads only its own rows.
 
 ### Real-AWS temporary deploy (approved)
 - `build_layer.sh` (Docker) → deploy `KeriCore` + pooled witness + mailbox to temp domains on
-  `personal` → verify incept/OOBI/receipts + SSE keepalive from the shared table → confirm KEL rows
-  under `shared`.
-- **Re-run the LeadingKeys probe** (`keri_cdk/probes/leadingkeys/`) against the **new** boundary:
-  prove a witness role is DENIED a Service-AID's `<alias>:reg` Reger (credential bodies), and ALLOWED
-  the shared KEL — the boundary that now matters. Tear down.
+  `personal` → verify incept/OOBI/receipts + SSE keepalive from the shared table; rows under each
+  service's namespace.
+- **Re-run the LeadingKeys probe** (`keri_cdk/probes/leadingkeys/`): confirm the per-service boundary
+  (`<id>:*#*`) still holds — a witness role cannot read the mailbox's or a Service-AID's namespace.
+  Tear down.
+
+## Deferred — the shared-KEL "key-state oracle" (the next focused effort, "A")
+
+The architecturally exciting idea — a trust-domain-wide shared KEL pool so any counterparty resolved
+by any service is instantly available to all — is deferred, NOT abandoned. What it requires (and why
+it's its own effort):
+
+- **A new `DynamoDBer` capability: per-store namespace routing.** `BASER_STORES` (`lambding.py:34`)
+  mixes shareable public KEL stores with per-node state that must NOT be shared. Sharing the whole
+  Baser is unsound (it would share the node's own habitat registry `habs./names./hbys.` and its
+  processing escrows). Only a *subset* of stores is shareable:
+  - **Shareable (prefix-keyed, public):** `kels. evts. fels. dtss. sigs. wigs. rcts. vrcs. aess. fons. wits. stts. ksns. knas.`
+  - **Per-node (must stay private):** `habs. names. hbys.` (registry); the escrows (`pses. ooes. pwes. …`); KRAM/challenge stores.
+  - keripy's own `Baser.clean()` (`basing.py:1534-1537`) already encodes this split (regenerate KEL, copy state, **omit escrows**).
+- The mechanism: a `DynamoDBer` that routes a configured shareable-store set → a shared namespace
+  (`shared`) and everything else → the per-service namespace, injected via the existing
+  `Habery(db=...)` seam — keripy core unchanged. **No prior art** (keria isolates; selective
+  per-store sharing is novel), but the data model supports it (KEL stores are prefix-keyed and
+  coexist safely).
+- **Build it with the micro-app-runtime**, when real Service-AIDs make the re-resolution savings
+  concrete and testable, and before the production cutover (so no migration). See memory
+  `project_kel_public_shared_oracle`.
 
 ## Out of scope / deferred
-- **Per-store namespace routing** in `DynamoDBer` (share public TEL state too; scope `exns`/mailbox
-  messages independently) — the finer refinement; needs a core-library change.
-- The Service-AID `alias`-vs-stack-name decision (micro-app-runtime; memory note).
-- The credential-presentation gate (`required_schema` / Tevery extraction still stubbed — the
-  verifier currently discards; relevant because the private tier only matters for issuer/holder roles).
-- The real SAM→CDK cutover trigger (live 5×5 federation untouched); the watcher handler build.
+- The shared-KEL oracle / per-store split (above).
+- The Service-AID `alias`-vs-stack-name decision (micro-app-runtime).
+- The credential-presentation gate (`required_schema`/Tevery extraction still stubbed).
+- The real SAM→CDK cutover trigger; the watcher handler build.
 
 ## Merge strategy
 Direct merge to `development` (matches Phase A/B). Worktree `~/code/keripy/.worktrees/cdk-phaseC`,
