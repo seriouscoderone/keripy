@@ -195,3 +195,25 @@ def test_shared_kel_stores_is_public_subset_of_baser():
     # the verifiable key-event/receipt/key-state core IS shared
     assert {"kels.", "evts.", "fels.", "sigs.", "wigs.", "rcts.", "stts.", "ksns."} \
         <= set(SHARED_KEL_STORES)
+
+
+@needs_moto
+def test_shared_kel_oracle_cross_service_read_and_private_isolation():
+    """Service A writes a counterparty KEL into the SHARED store; a separate
+    service B reads it from `shared` (the oracle) — but B cannot see A's PRIVATE
+    store rows."""
+    from moto import mock_aws
+    with mock_aws():
+        a = DynamoDBer.open(name="A", stores=["kels.", "habs."], region="us-east-1",
+                            table_name="keri-core", namespace="A:kel",
+                            shared_namespace="shared", shared_stores={"kels."})
+        b = DynamoDBer.open(name="B", stores=["kels.", "habs."], region="us-east-1",
+                            table_name="keri-core", namespace="B:kel",
+                            shared_namespace="shared", shared_stores={"kels."})
+        a_kels, b_kels = a.env.open_db(b"kels."), b.env.open_db(b"kels.")
+        a_habs, b_habs = a.env.open_db(b"habs."), b.env.open_db(b"habs.")
+        a.setVal(a_kels, b"EXcounterparty", b"key-event")     # A writes shared KEL
+        assert b.getVal(b_kels, b"EXcounterparty") == b"key-event"  # B reads via oracle
+        a.setVal(a_habs, b"AownHab", b"secret")               # A writes PRIVATE store
+        assert b.getVal(b_habs, b"AownHab") is None            # invisible to B
+        a.close(); b.close()
