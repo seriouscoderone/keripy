@@ -25,7 +25,7 @@ from dataclasses import dataclass
 
 from keri.db.dynamodbing import DynamoDBer
 from keri.db.secretkeeper import SecretStore, SecretKeeper
-from keri.app.lambding import (BASER_STORES, REGER_STORES,
+from keri.app.lambding import (BASER_STORES, REGER_STORES, SHARED_KEL_STORES,
                                setup_baser, setup_keeper, setup_reger)
 from keri.app.habbing import Habery
 from keri.app.configing import Configer
@@ -129,6 +129,7 @@ def init(cfg: Config | None = None) -> RuntimeState:
     # apart or key-state and registry-state records would collide.
     db = DynamoDBer.open(name=cfg.alias, stores=BASER_STORES + [PROC_STORE],
                          table_name=cfg.core_table, namespace=cfg.kel_namespace,
+                         shared_namespace="shared", shared_stores=SHARED_KEL_STORES,
                          **kwa)
     setup_baser(db)
     reger = DynamoDBer.open(name=cfg.alias, stores=REGER_STORES,
