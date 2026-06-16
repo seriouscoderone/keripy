@@ -78,3 +78,10 @@ def test_mailbox_imports_core_table_lock():
     import json
     body = json.dumps(_synth().to_json())
     assert "Fn::ImportValue" in body, "mailbox must import the core table (cross-stack lock)"
+
+
+def test_mailbox_iam_grants_shared_and_private_leadingkeys():
+    import json
+    body = json.dumps(_synth().to_json())
+    assert "shared#*" in body and "__meta__#shared#*" in body, \
+        "mailbox must grant the shared-KEL oracle namespace"

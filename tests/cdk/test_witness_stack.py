@@ -60,3 +60,10 @@ def test_witness_scoped_secretsmanager_iam():
     t.has_resource_properties("AWS::IAM::Policy", {
         "PolicyDocument": {"Statement": Match.array_with([Match.object_like({
             "Action": Match.array_with(["secretsmanager:GetSecretValue"])})])}})
+
+
+def test_witness_iam_grants_shared_and_private_leadingkeys():
+    import json
+    body = json.dumps(_synth().to_json())
+    assert "shared#*" in body and "__meta__#shared#*" in body, \
+        "witness must grant the shared-KEL oracle namespace"

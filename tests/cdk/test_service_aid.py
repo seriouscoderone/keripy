@@ -62,3 +62,11 @@ def test_service_side_imports_core_table_lock():
         "service stack does not import the core table — cross-stack lifecycle "
         "lock is broken (the core stack could be deleted while the service is live)"
     )
+
+
+def test_service_aid_grants_shared_leadingkeys():
+    import json
+    svc, _core = _synth()
+    body = json.dumps(svc.to_json())
+    assert "shared#*" in body and "__meta__#shared#*" in body, \
+        "Service-AID must grant the shared-KEL oracle namespace"

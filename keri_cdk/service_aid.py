@@ -216,6 +216,8 @@ class ServiceAid(Construct):
                 conditions={
                     "ForAllValues:StringLike": {
                         "dynamodb:LeadingKeys": [
+                            "shared#*",
+                            "__meta__#shared#*",
                             f"{alias}:*#*",
                             f"__meta__#{alias}:*",
                         ]

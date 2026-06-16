@@ -169,6 +169,8 @@ class MailboxStack(Stack):
                 conditions={
                     "ForAllValues:StringLike": {
                         "dynamodb:LeadingKeys": [
+                            "shared#*",
+                            "__meta__#shared#*",
                             f"{Aws.STACK_NAME}:*#*",
                             f"__meta__#{Aws.STACK_NAME}:*",
                         ]
