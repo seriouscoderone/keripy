@@ -17,11 +17,12 @@ from keri.db.dynamodbing import DynamoDBer, DynamoSubDb, _hex
 needs_moto = pytest.mark.skipif(not HAS_MOTO, reason="requires moto")
 
 
-def _dber(name="svc", namespace=None):
+def _dber(name="svc", namespace=None, shared_namespace=None, shared_stores=None):
     """A DynamoDBer with no live AWS resources — only the pure formatters
     are exercised, which never touch the client/table."""
     return DynamoDBer(name=name, stores={}, table_name="core",
-                      client=None, table=None, namespace=namespace)
+                      client=None, table=None, namespace=namespace,
+                      shared_namespace=shared_namespace, shared_stores=shared_stores)
 
 
 def test_pk_defaults_namespace_to_name():
@@ -139,3 +140,36 @@ def test_witness_mailbox_reger_namespaces_isolated_on_one_table():
         wit.close()
         mbx.close()
         reg.close()
+
+
+def test_nskey_routes_shared_store_to_shared_namespace():
+    """A store in shared_stores routes to shared_namespace; others to the instance namespace."""
+    db = _dber(name="svc", namespace="svc:kel",
+               shared_namespace="shared", shared_stores={"kels."})
+    kels = DynamoSubDb(name="kels.", table_name="core")
+    habs = DynamoSubDb(name="habs.", table_name="core")
+    assert db._pk(kels, b"AID") == f"shared#kels.#{_hex(b'AID')}"
+    assert db._gsi_pk(kels) == "shared#kels."
+    assert db._pk(habs, b"AID") == f"svc:kel#habs.#{_hex(b'AID')}"
+    assert db._gsi_pk(habs) == "svc:kel#habs."
+
+
+def test_nskey_backward_compatible_when_no_shared_args():
+    """No shared args ⇒ every store uses the instance namespace (Phase C behavior)."""
+    db = _dber(name="svc", namespace="svc:kel")
+    kels = DynamoSubDb(name="kels.", table_name="core")
+    assert db._pk(kels, b"AID") == f"svc:kel#kels.#{_hex(b'AID')}"
+
+
+def test_meta_pk_of_shared_store_lands_in_shared_namespace():
+    """A shared store's meta row PK uses the shared namespace; the version meta store stays private."""
+    db = _dber(name="svc", namespace="svc:kel",
+               shared_namespace="shared", shared_stores={"kels."})
+    assert db._nskey("kels.") == "shared#kels."        # -> meta PK __meta__#shared#kels.
+    assert db._nskey("__meta__") == "svc:kel#__meta__"  # version meta is per-service
+
+
+def test_shared_namespace_rejects_hash():
+    import pytest
+    with pytest.raises(ValueError):
+        _dber(name="svc", shared_namespace="bad#ns", shared_stores={"kels."})

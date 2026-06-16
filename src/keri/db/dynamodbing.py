@@ -194,7 +194,9 @@ class DynamoDBer:
     """
 
     def __init__(self, *, name: str, stores: dict[str, DynamoSubDb],
-                 table_name: str, client, table, namespace: str | None = None):
+                 table_name: str, client, table, namespace: str | None = None,
+                 shared_namespace: str | None = None,
+                 shared_stores=None):
         self.name = name
         # Every key is namespaced — there is no bare/legacy format. When no
         # explicit namespace is given, the instance name IS the namespace, so a
@@ -209,6 +211,14 @@ class DynamoDBer:
         if "#" in namespace:
             raise ValueError(f"namespace may not contain '#': {namespace!r}")
         self.namespace = namespace
+        # Per-store routing: stores in `shared_stores` are keyed under
+        # `shared_namespace` instead of `namespace`, so the public KEL/receipt/
+        # key-state stores pool into one shared namespace (the key-state oracle)
+        # while node-private stores stay per-service. Both off ⇒ unchanged.
+        if shared_namespace and "#" in shared_namespace:
+            raise ValueError(f"shared_namespace may not contain '#': {shared_namespace!r}")
+        self._shared_namespace = shared_namespace
+        self._shared_stores = frozenset(shared_stores or ())
         self.env = DynamoEnv(self)
         self._stores = stores
         self.stores = list(stores)
@@ -233,6 +243,8 @@ class DynamoDBer:
         clear: bool = False,
         session: "boto3.Session | None" = None,
         namespace: str | None = None,
+        shared_namespace: str | None = None,
+        shared_stores=None,
     ) -> "DynamoDBer":
         """
         Open a DynamoDB-backed DynamoDBer instance.
@@ -279,7 +291,8 @@ class DynamoDBer:
             )
 
         dber = cls(name=name, stores=opened, table_name=table_name,
-                   client=client, table=table, namespace=namespace)
+                   client=client, table=table, namespace=namespace,
+                   shared_namespace=shared_namespace, shared_stores=shared_stores)
 
         if clear:
             for store_name in all_store_names:
@@ -344,12 +357,13 @@ class DynamoDBer:
     # ---- Internal DynamoDB helpers ----
 
     def _nskey(self, name: str) -> str:
-        """Prefix a store/meta name with the tenant namespace.
-
-        The namespace is always set (explicit, else the instance name), so every
-        key is namespaced — there is no bare format.
-        """
-        return f"{self.namespace}#{name}"
+        """Prefix a store/meta name with its namespace. Stores listed in
+        shared_stores route to shared_namespace (the pooled key-state oracle);
+        all others use this instance's per-service namespace."""
+        ns = (self._shared_namespace
+              if self._shared_namespace and name in self._shared_stores
+              else self.namespace)
+        return f"{ns}#{name}"
 
     def _pk(self, db: DynamoSubDb, key: bytes) -> str:
         """Form the partition key: namespace#subdb_name#hex(key)."""
