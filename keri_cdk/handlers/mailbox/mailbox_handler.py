@@ -159,7 +159,7 @@ def init():
 
     from keri.db.dynamodbing import DynamoDBer
     from keri.app.lambding import (
-        BASER_STORES, MAILBOXER_STORES,
+        BASER_STORES, MAILBOXER_STORES, SHARED_KEL_STORES,
         setup_baser, setup_keeper, setup_mailboxer,
     )
     from keri.app.habbing import Habery
@@ -189,8 +189,10 @@ def init():
 
     # Baser + Mailboxer share a table (non-overlapping subkeys)
     baser_and_mbx_stores = list(set(BASER_STORES + MAILBOXER_STORES))
-    db = DynamoDBer.open(name=name, stores=baser_and_mbx_stores,
-                         table_name=baser_table, namespace=_namespace(name), **kwa)
+    db = DynamoDBer.open(name=name, stores=baser_and_mbx_stores, table_name=baser_table,
+                         namespace=_namespace(name),
+                         shared_namespace="shared", shared_stores=SHARED_KEL_STORES,
+                         **kwa)
     setup_baser(db)
     setup_mailboxer(db)
 

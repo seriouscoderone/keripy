@@ -64,3 +64,26 @@ def test_witness_open_passes_shared_kel_stores(monkeypatch):
         pass
     assert captured.get("shared_namespace") == "shared"
     assert captured.get("shared_stores") == SHARED_KEL_STORES
+
+
+def test_mailbox_open_passes_shared_kel_stores(monkeypatch):
+    import keri_cdk.handlers.mailbox.mailbox_handler as mh
+    from keri.app.lambding import SHARED_KEL_STORES
+    captured = {}
+
+    def fake_open(*a, **kw):
+        captured.update(kw)
+        raise SystemExit
+
+    monkeypatch.setattr("keri.db.dynamodbing.DynamoDBer.open", fake_open)
+    monkeypatch.setenv("MAILBOX_BASER_TABLE", "keri-core")
+    monkeypatch.setenv("MAILBOX_NAMESPACE", "KeriHostMailbox:mbx")
+    mh._hby = None
+    try:
+        mh.init()
+    except SystemExit:
+        pass
+    assert captured.get("shared_namespace") == "shared"
+    assert captured.get("shared_stores") == SHARED_KEL_STORES
+    # Mailboxer stores are NOT in the shared set
+    assert "tpcs." not in SHARED_KEL_STORES and "msgs." not in SHARED_KEL_STORES
