@@ -173,3 +173,25 @@ def test_shared_namespace_rejects_hash():
     import pytest
     with pytest.raises(ValueError):
         _dber(name="svc", shared_namespace="bad#ns", shared_stores={"kels."})
+
+
+def test_shared_kel_stores_is_public_subset_of_baser():
+    from keri.app.lambding import BASER_STORES, SHARED_KEL_STORES
+    baser = set(BASER_STORES)
+    # (1) Only Baser stores are ever shared. This alone guarantees no Reger-only
+    # confidential store (credential bodies / TEL events) can leak into the oracle,
+    # since none of those are in BASER_STORES.
+    assert set(SHARED_KEL_STORES) <= baser, "shared set must be a subset of BASER_STORES"
+    # (2) Must NOT share the node-PRIVATE Baser stores: escrows, hab registry,
+    # KRAM/challenge, OOBI queues, reply/endpoint config.
+    node_private = {"habs.", "names.", "hbys.", "pses.", "pwes.", "ooes.", "udes.",
+                    "ldes.", "ures.", "vres.", "exns.", "oobis.", "rpys.", "ends.",
+                    "locs.", "ctyp.", "msgc."}
+    assert set(SHARED_KEL_STORES).isdisjoint(node_private), "shared set leaks a node-private store"
+    # Belt-and-suspenders: credential bodies / TEL stores are never shared (also
+    # guaranteed by the subset check above, since these are not Baser stores).
+    assert set(SHARED_KEL_STORES).isdisjoint({"creds.", "cmse.", "ccrd.", "tvts.", "tels."}), \
+        "credential-body / TEL store must never be shared"
+    # the verifiable key-event/receipt/key-state core IS shared
+    assert {"kels.", "evts.", "fels.", "sigs.", "wigs.", "rcts.", "stts.", "ksns."} \
+        <= set(SHARED_KEL_STORES)

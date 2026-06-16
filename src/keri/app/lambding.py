@@ -56,6 +56,16 @@ BASER_STORES = [
     "tmqs.",
 ]
 
+# Public, AID-prefix-keyed key-event / receipt / key-state stores that are SAFE
+# to pool into one shared namespace across services in a trust domain (the
+# "key-state oracle"). A strict subset of BASER_STORES; excludes the node's hab
+# registry, ALL escrows, KRAM/challenge, OOBI queues, and the entire Reger.
+# See docs/superpowers/specs/2026-06-15-cdk-kel-oracle-design.md.
+SHARED_KEL_STORES = frozenset({
+    "evts.", "fels.", "kels.", "dtss.", "sigs.", "wigs.", "rcts.", "vrcs.",
+    "aess.", "fons.", "wits.", "stts.", "ksns.", "knas.",
+})
+
 #  Keeper stores (keeping.py)
 KEEPER_STORES = [
     "gbls.",  "pris.",  "prxs.",  "nxts.",  "smids.",
