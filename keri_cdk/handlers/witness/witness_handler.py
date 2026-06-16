@@ -66,7 +66,7 @@ def init():
 
     from keri.db.dynamodbing import DynamoDBer
     from keri.app.lambding import (
-        BASER_STORES,
+        BASER_STORES, SHARED_KEL_STORES,
         setup_baser, setup_keeper,
     )
     from keri.app.habbing import Habery
@@ -99,7 +99,9 @@ def init():
     # still has any prior mbx-related keys from before the strip; harmless,
     # they're never read by this handler now.)
     db = DynamoDBer.open(name=name, stores=BASER_STORES, table_name=baser_table,
-                         namespace=_namespace(name), **kwa)
+                         namespace=_namespace(name),
+                         shared_namespace="shared", shared_stores=SHARED_KEL_STORES,
+                         **kwa)
     setup_baser(db)
 
     # Keeper: one KMS-encrypted secret per stack (NOT a DynamoDB -ks table).
