@@ -29,7 +29,11 @@ Usage:
 Real key shapes reproduced (src/keri/db/dynamodbing.py:344-494):
   normal item : PK = "{ns}#{subdb}#{hex}"   gsi_pk = "{ns}#{subdb}"   gsi_sk = "{hex}"
   meta   item : PK = "__meta__#{ns}#{subdb}" gsi_pk = "__meta__"      gsi_sk = "{ns}#{subdb}"
-Production LeadingKeys patterns (keri_cdk/service_aid.py): ["{alias}:*#*", "__meta__#{alias}:*"]
+Production LeadingKeys patterns — the shared-KEL oracle four-pattern union
+(keri_cdk/service_aid.py + witness_stack.py + mailbox_stack.py):
+  ["shared#*", "__meta__#shared#*", "{alias}:*#*", "__meta__#{alias}:*"]
+The shared#* grant makes the pooled public KEL readable+writable by every tenant
+(the oracle); the {alias}:* grants keep each tenant's PRIVATE namespace isolated.
 """
 import argparse
 import json
@@ -75,6 +79,33 @@ def meta_item(ns: str) -> dict:
     }
 
 
+# The shared-KEL "oracle" namespace (no tenant alias). Both tenant policies grant
+# `shared#*` + `__meta__#shared#*`, so the pooled public-KEL store is readable AND
+# writable by every tenant — that is the oracle, and the boundary below proves it
+# coexists with strict per-tenant isolation of the PRIVATE namespaces.
+SHARED_NS = "shared"
+
+
+def shared_normal_item(key: str) -> dict:
+    return {
+        "PK": {"S": f"{SHARED_NS}#{SUBDB}#{hexk(key)}"},
+        "SK": {"S": "."},
+        "gsi_pk": {"S": f"{SHARED_NS}#{SUBDB}"},
+        "gsi_sk": {"S": hexk(key)},
+        "val": {"S": "pooled-key-event"},
+    }
+
+
+def shared_meta_item() -> dict:
+    return {
+        "PK": {"S": f"__meta__#{SHARED_NS}#{SUBDB}"},
+        "SK": {"S": "__meta__"},
+        "gsi_pk": {"S": "__meta__"},          # BARE constant — not namespaced
+        "gsi_sk": {"S": f"{SHARED_NS}#{SUBDB}"},
+        "val": {"S": "meta-of-shared"},
+    }
+
+
 def leading_keys_policy(table_arn: str, alias: str) -> dict:
     """The EXACT production statement (keri_cdk/service_aid.py), verbatim shape."""
     return {
@@ -92,7 +123,13 @@ def leading_keys_policy(table_arn: str, alias: str) -> dict:
             "Resource": [table_arn, f"{table_arn}/index/*"],
             "Condition": {
                 "ForAllValues:StringLike": {
-                    "dynamodb:LeadingKeys": [f"{alias}:*#*", f"__meta__#{alias}:*"]
+                    # the four-pattern oracle union (keri_cdk/service_aid.py +
+                    # witness_stack.py + mailbox_stack.py): shared oracle namespace
+                    # PLUS this tenant's own private namespace.
+                    "dynamodb:LeadingKeys": [
+                        "shared#*", "__meta__#shared#*",
+                        f"{alias}:*#*", f"__meta__#{alias}:*",
+                    ]
                 }
             },
         }],
@@ -151,7 +188,11 @@ def seed(ddb, table):
     for t in TENANTS.values():
         ddb.put_item(TableName=table, Item=normal_item(t["ns"], "event0"))
         ddb.put_item(TableName=table, Item=meta_item(t["ns"]))
-    print(f"  seeded {len(TENANTS)} tenants (normal + meta items each)")
+    # the shared oracle namespace: one pooled item + its meta, written ONCE (no
+    # tenant owns it). A read of these by tenant A proves cross-writer visibility.
+    ddb.put_item(TableName=table, Item=shared_normal_item("event0"))
+    ddb.put_item(TableName=table, Item=shared_meta_item())
+    print(f"  seeded {len(TENANTS)} tenants (normal + meta each) + the shared oracle namespace")
 
 
 def create_role(iam, role_name, account, table_arn, alias):
@@ -261,6 +302,20 @@ def run_assertions(client_a, table):
          lambda: client_a.batch_write_item(RequestItems={
              table: [{"PutRequest": {"Item": normal_item(b, "poison2")}}]}), DENY,
          "bulk write path must be scoped too"),
+        # ── shared oracle namespace (pooled KEL — readable + writable by ALL) ──
+        ("shared: base read of pooled item (written by no tenant)  <<< ORACLE READ",
+         lambda: q_base(f"{SHARED_NS}#{SUBDB}#{hexk('event0')}"), ALLOW,
+         "any tenant must read the shared key-state oracle (cross-writer visibility)"),
+        ("GSI: shared gsi_pk",
+         lambda: q_gsi(f"{SHARED_NS}#{SUBDB}"), ALLOW,
+         "shared-store index read is shared-by-design"),
+        ("shared: own PutItem into the oracle  <<< ORACLE WRITE",
+         lambda: client_a.put_item(TableName=table, Item=shared_normal_item("writetest")), ALLOW,
+         "any tenant must write its public KEL into the shared pool"),
+        ("shared: meta base read (__meta__#shared#...)",
+         lambda: client_a.get_item(TableName=table, Key={
+             "PK": {"S": f"__meta__#{SHARED_NS}#{SUBDB}"}, "SK": {"S": "__meta__"}}), ALLOW,
+         "shared-store meta row is readable under __meta__#shared#*"),
     ]
 
     rows, ok = [], True
@@ -283,8 +338,9 @@ def print_report(rows, ok):
     crux_leaks = [r for r in rows if "CRUX" in r[0] and r[2] == ALLOW]
     if ok:
         print("VERDICT: ✅ LeadingKeys ENFORCES the multi-tenant boundary on the GSI AND the")
-        print("         write path. Pooled-core-table design is sound: cross-tenant reads,")
-        print("         index reads, and writes are all DENIED; same-tenant ops ALLOW.")
+        print("         write path, AND the shared-KEL oracle coexists with it: cross-tenant")
+        print("         PRIVATE reads/index-reads/writes are all DENIED; same-tenant ops and")
+        print("         the SHARED oracle namespace (read+write, cross-writer) all ALLOW.")
     else:
         print("VERDICT: ❌ One or more assertions FAILED. Inspect above.")
         for r in crux_leaks:
