@@ -151,17 +151,39 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 - Modify: `src/keri/app/lambding.py` (after `BASER_STORES`, ~`:57`)
 - Test: `tests/db/test_dynamodbing_namespace.py` (or `tests/app/test_lambding.py` if present — else co-locate)
 
+> **Resolution note (build, 2026-06-16):** `stts.` is a *nominal* subdb-name shared by
+> `Baser.states` (KEL key-state) and `Reger.states` (TEL/registry-state) — but they are
+> distinct stores because store identity is `(namespace, subdb-name)`, and the `namespace`
+> prefix is the DynamoDB analog of keripy's separate LMDB *environments* (`~/.keri/db` vs
+> `~/.keri/reg`). The oracle routes only the **Baser's** `stts.` → `shared#stts.`; the Reger
+> open never receives `shared_stores` (Task 5), so its `stts.` stays at `<alias>:tel#stts.`.
+> An earlier draft of this test compared bare subdb-names against `set(REGER_STORES)`, which
+> conflates name with identity and falsely flagged `stts.`. The corrected invariants are:
+> (1) `SHARED_KEL_STORES ⊆ BASER_STORES` (only Baser stores share — this alone guarantees no
+> Reger-only confidential store like `creds.`/`tvts.` can leak, since they aren't Baser stores),
+> and (2) disjoint from the node-**private** Baser stores (escrows, hab registry, KRAM, OOBI,
+> reply/endpoint). `stts.` stays in the 14.
+
 - [ ] **Step 1: Write failing test** (append to `tests/db/test_dynamodbing_namespace.py`):
 ```python
 def test_shared_kel_stores_is_public_subset_of_baser():
-    from keri.app.lambding import BASER_STORES, REGER_STORES, SHARED_KEL_STORES
+    from keri.app.lambding import BASER_STORES, SHARED_KEL_STORES
     baser = set(BASER_STORES)
+    # (1) Only Baser stores are ever shared. This alone guarantees no Reger-only
+    # confidential store (credential bodies / TEL events) can leak into the oracle,
+    # since none of those are in BASER_STORES.
     assert set(SHARED_KEL_STORES) <= baser, "shared set must be a subset of BASER_STORES"
-    # must NOT share escrows, node registry, KRAM, OOBI, or any Reger store
-    forbidden = {"habs.", "names.", "hbys.", "pses.", "pwes.", "ooes.", "udes.",
-                 "ldes.", "ures.", "vres.", "exns.", "oobis."} | set(REGER_STORES)
-    assert set(SHARED_KEL_STORES).isdisjoint(forbidden), "shared set leaks a private store"
-    # the verifiable key-event/receipt/key-state core
+    # (2) Must NOT share the node-PRIVATE Baser stores: escrows, hab registry,
+    # KRAM/challenge, OOBI queues, reply/endpoint config.
+    node_private = {"habs.", "names.", "hbys.", "pses.", "pwes.", "ooes.", "udes.",
+                    "ldes.", "ures.", "vres.", "exns.", "oobis.", "rpys.", "ends.",
+                    "locs.", "ctyp.", "msgc."}
+    assert set(SHARED_KEL_STORES).isdisjoint(node_private), "shared set leaks a node-private store"
+    # Belt-and-suspenders: credential bodies / TEL stores are never shared (also
+    # guaranteed by the subset check above, since these are not Baser stores).
+    assert set(SHARED_KEL_STORES).isdisjoint({"creds.", "cmse.", "ccrd.", "tvts.", "tels."}), \
+        "credential-body / TEL store must never be shared"
+    # the verifiable key-event/receipt/key-state core IS shared
     assert {"kels.", "evts.", "fels.", "sigs.", "wigs.", "rcts.", "stts.", "ksns."} \
         <= set(SHARED_KEL_STORES)
 ```
