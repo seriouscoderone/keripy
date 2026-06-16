@@ -130,6 +130,16 @@ _GSI_SK = "gsi_sk"   # hex(full_original_key)
 _APPEND_MAX_RETRY = 64   # ordinal-collision retry ceiling; exceeding it signals a real
                          # anomaly (hot-key storm / bug), not normal contention
 
+# Stores that must NEVER be routed into a shared namespace via `shared_stores`,
+# regardless of caller. These hold CONFIDENTIAL data — ACDC credential bodies
+# (creds./cmse./ccrd.) and TEL events (tvts./tels.) — that lives only in a Reger.
+# The shared-KEL oracle pools the PUBLIC key-event/key-state stores; pooling any
+# of these would leak private data across the trust domain. `__init__` rejects a
+# `shared_stores` naming one of them so a future Reger open that mis-copies the
+# witness/Service-AID sharing args fails loudly instead of silently leaking.
+# (keri.app.lambding.SHARED_KEL_STORES is asserted disjoint from this set.)
+NEVER_SHARE_STORES = frozenset({"creds.", "cmse.", "ccrd.", "tvts.", "tels."})
+
 
 @dataclass
 class DynamoSubDb:
@@ -219,6 +229,14 @@ class DynamoDBer:
             raise ValueError(f"shared_namespace may not contain '#': {shared_namespace!r}")
         self._shared_namespace = shared_namespace
         self._shared_stores = frozenset(shared_stores or ())
+        # Defense-in-depth: confidential stores (credential bodies / TEL events)
+        # must never be pooled into a shared namespace. Fail loudly if a caller
+        # mis-applies shared_stores to one (e.g. a future Reger open).
+        _leaked = self._shared_stores & NEVER_SHARE_STORES
+        if _leaked:
+            raise ValueError(
+                f"shared_stores may not include confidential store(s) {sorted(_leaked)} "
+                "— credential bodies / TEL events must never be pooled into a shared namespace")
         self.env = DynamoEnv(self)
         self._stores = stores
         self.stores = list(stores)

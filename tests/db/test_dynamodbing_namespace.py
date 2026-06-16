@@ -175,6 +175,20 @@ def test_shared_namespace_rejects_hash():
         _dber(name="svc", shared_namespace="bad#ns", shared_stores={"kels."})
 
 
+def test_shared_stores_rejects_confidential_store():
+    """Open/init must HARD-REJECT a shared_stores naming a confidential store
+    (credential bodies / TEL events) — the guard that makes a future Reger open
+    mis-applying the sharing args fail loudly instead of silently leaking."""
+    import pytest
+    from keri.db.dynamodbing import NEVER_SHARE_STORES
+    assert NEVER_SHARE_STORES  # non-empty
+    for bad in NEVER_SHARE_STORES:
+        with pytest.raises(ValueError):
+            _dber(name="svc", shared_namespace="shared", shared_stores={"kels.", bad})
+    # a clean public-only shared set is accepted (control)
+    _dber(name="svc", shared_namespace="shared", shared_stores={"kels.", "evts."})
+
+
 def test_shared_kel_stores_is_public_subset_of_baser():
     from keri.app.lambding import BASER_STORES, SHARED_KEL_STORES
     baser = set(BASER_STORES)
@@ -188,9 +202,10 @@ def test_shared_kel_stores_is_public_subset_of_baser():
                     "ldes.", "ures.", "vres.", "exns.", "oobis.", "rpys.", "ends.",
                     "locs.", "ctyp.", "msgc."}
     assert set(SHARED_KEL_STORES).isdisjoint(node_private), "shared set leaks a node-private store"
-    # Belt-and-suspenders: credential bodies / TEL stores are never shared (also
-    # guaranteed by the subset check above, since these are not Baser stores).
-    assert set(SHARED_KEL_STORES).isdisjoint({"creds.", "cmse.", "ccrd.", "tvts.", "tels."}), \
+    # Belt-and-suspenders: SHARED_KEL_STORES must be disjoint from the runtime
+    # NEVER_SHARE_STORES guard (single source of truth for confidential stores).
+    from keri.db.dynamodbing import NEVER_SHARE_STORES
+    assert set(SHARED_KEL_STORES).isdisjoint(NEVER_SHARE_STORES), \
         "credential-body / TEL store must never be shared"
     # the verifiable key-event/receipt/key-state core IS shared
     assert {"kels.", "evts.", "fels.", "sigs.", "wigs.", "rcts.", "stts.", "ksns."} \
