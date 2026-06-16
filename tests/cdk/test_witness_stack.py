@@ -67,3 +67,7 @@ def test_witness_iam_grants_shared_and_private_leadingkeys():
     body = json.dumps(_synth().to_json())
     assert "shared#*" in body and "__meta__#shared#*" in body, \
         "witness must grant the shared-KEL oracle namespace"
+    # the per-service private grant must ALSO survive (dropping it would lock the
+    # witness out of its own namespace). STACK_NAME renders as Fn::Join, so its
+    # literal ":*#*" suffix is the marker (absent from both shared patterns).
+    assert ":*#*" in body, "witness must keep its per-service LeadingKeys grant"

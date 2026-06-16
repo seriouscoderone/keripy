@@ -70,3 +70,8 @@ def test_service_aid_grants_shared_leadingkeys():
     body = json.dumps(svc.to_json())
     assert "shared#*" in body and "__meta__#shared#*" in body, \
         "Service-AID must grant the shared-KEL oracle namespace"
+    # the per-alias private grant must ALSO survive (dropping it would lock the
+    # service out of its own namespace). `alias` is a literal here, so its
+    # patterns appear verbatim.
+    assert "gated:*#*" in body and "__meta__#gated:*" in body, \
+        "Service-AID must keep its per-alias LeadingKeys grant"
