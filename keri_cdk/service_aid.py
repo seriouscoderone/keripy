@@ -45,10 +45,20 @@ except ImportError:  # pragma: no cover
     from keri_cdk.framework_layer import ServiceAidFrameworkLayer
 
 
+# DO NOT change this to `class ServiceAidFunction(Construct, iam.IGrantable)`:
+# direct multiple inheritance raises a jsii metaclass conflict (JSIIMeta vs the
+# Protocol's _ProtocolMeta). @jsii.implements is the canonical jsii way to
+# declare a construct satisfies an interface.
 @jsii.implements(iam.IGrantable)
 class ServiceAidFunction(Construct):
     """One Service-AID Function: compute_code zip + two layers over the shared
-    core table (own namespace) + keeper secret + inception Custom Resource."""
+    core table (own namespace) + keeper secret + inception Custom Resource.
+
+    Authz note: there is no `allowlist`/`required_schema` constructor param (unlike
+    the retired ServiceAid). Authorization is now a keri_serviceaid PROVIDER
+    concern — the dev declares it on the ServiceAid in compute_code (e.g.
+    `Allowlist([...])`), or overrides via the `environment` dict if a provider
+    reads env. The construct only wires infrastructure + the framework env keys."""
 
     def __init__(
         self,
@@ -143,10 +153,11 @@ class ServiceAidFunction(Construct):
 
 
 def inject_handler_shim(asset_dir: str) -> None:
-    """Auto-inject the 3-line handler.py shim into a compute_code asset dir so the
+    """Auto-inject the 1-line handler.py shim into a compute_code asset dir so the
     deploy is robust whether or not Lambda resolves the layer-resident handler.
     Callers (the example app) run this on the staged asset before Code.from_asset.
-    Harmless when the layer-resident handler resolves."""
+    Idempotent (only writes if absent); harmless when the layer-resident handler
+    resolves."""
     shim = os.path.join(asset_dir, "handler.py")
     if not os.path.exists(shim):
         with open(shim, "w") as f:
