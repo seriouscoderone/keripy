@@ -28,12 +28,24 @@ class FakeAuthz:
         return (self.allow, "" if self.allow else "denied")
 
 
-class FakeIssuer:
+# A shared, ordered call log so tests can assert the load-bearing sequence
+# (e.g. record MUST happen before deliver). Each fake appends its event name.
+class CallLog:
     def __init__(self):
+        self.events = []
+
+
+class FakeIssuer:
+    def __init__(self, log=None):
         self.calls = 0
+        self.log = log
+        self.seen_schema_said = None
 
     def issue(self, reply, ctx):
         self.calls += 1
+        self.seen_schema_said = reply.schema_said   # capture the stamped schema
+        if self.log is not None:
+            self.log.events.append("issue")
         return b"GRANT-" + reply.recipient.encode()
 
 
@@ -43,22 +55,28 @@ class FakeResolver:
 
 
 class FakeDeliverer:
-    def __init__(self):
+    def __init__(self, log=None):
         self.delivered = []
+        self.log = log
 
     def deliver(self, msg, endpoint, ctx):
         self.delivered.append((bytes(msg), endpoint.eid))
+        if self.log is not None:
+            self.log.events.append("deliver")
 
 
 class FakeLedger:
-    def __init__(self):
+    def __init__(self, log=None):
         self.store = {}
+        self.log = log
 
     def seen(self, said):
         return self.store.get(said)
 
     def record(self, said, grant):
         self.store[said] = bytes(grant)
+        if self.log is not None:
+            self.log.events.append("record")
 
 
 def _serder(route="/svc/cmd/go", sender="EReq", said="ESaid1", attrs=None):
@@ -87,14 +105,22 @@ def _svc_with_acdc_command():
 
 
 def test_acdc_path_issues_records_and_delivers():
-    issuer, resolver, deliverer, ledger = (FakeIssuer(), FakeResolver(),
-                                           FakeDeliverer(), FakeLedger())
+    log = CallLog()
+    issuer, resolver, deliverer, ledger = (FakeIssuer(log), FakeResolver(),
+                                           FakeDeliverer(log), FakeLedger(log))
     state = _state(_svc_with_acdc_command(), ledger, issuer, resolver, deliverer,
                    FakeVerifier(), FakeAuthz(allow=True))
     pipeline.process(state, _serder(), attachments=[])
     assert issuer.calls == 1
     assert deliverer.delivered == [(b"GRANT-EReq", "EMbx")]
-    assert ledger.seen("ESaid1") == b"GRANT-EReq"   # recorded BEFORE deliver
+    assert ledger.seen("ESaid1") == b"GRANT-EReq"
+    # Load-bearing exactly-once invariant: issue → record → deliver, in that
+    # order. record MUST precede deliver (a swapped order would let a crash
+    # between deliver and record cause a re-issue on replay).
+    assert log.events == ["issue", "record", "deliver"]
+    # The command's declared `issues` schema SAID is stamped onto the reply
+    # before issuance (the framework's credential-type guarantee).
+    assert issuer.seen_schema_said == "ESchema"
 
 
 def test_deny_is_silent_no_issue_no_deliver():
