@@ -48,7 +48,13 @@ class Issuer(Protocol):
 def ensure_registry(hby, hab, rgy, *, name: str):
     """Return the registry for `name`, creating it (no backers) if absent.
     The inception Custom Resource creates it exactly once at deploy time; this
-    lazy create is a tests/bootstrap fallback (not race-safe)."""
+    lazy create is a tests/bootstrap fallback (not race-safe).
+
+    Race mechanics: makeRegistry seeds a random nonce, so two cold starts that
+    both miss the read branch would mint two DIFFERENT registries for the same
+    name (last-write-wins in reger.regs). The deploy contract is that the
+    inception CR creates the registry once, so the runtime path only ever hits
+    the read branch above."""
     existing = rgy.registryByName(name)
     if existing is not None:
         return existing
@@ -81,6 +87,17 @@ class IpexGrantIssuer:
     def _issue_grant(self, hby, hab, rgy, *, schema_said, recipient, attributes,
                      edges=None, rules=None, registry_name="svc",
                      message="", timestamp=None) -> bytearray:
+        """Issue an ACDC of `schema_said` to `recipient`, return a CESR IPEX grant.
+
+        Partial-failure semantics: if this dies after `hab.interact` but before
+        `_complete`, the KEL keeps a harmless orphan anchor and the TEL iss event
+        sits in escrow; the NEXT call's `_complete` pumps all escrows so the
+        abandoned credential silently completes ("issued but never delivered").
+        A retry mints a NEW credential SAID (fresh `dt`) UNLESS `attributes`
+        carries an explicit `dt` (which reproduces the same SAID). This is WHY the
+        pipeline records the request-SAID -> grant mapping (idempotency) BEFORE
+        returning: a replay re-delivers the recorded grant rather than re-issuing.
+        """
         timestamp = timestamp or helping.nowIso8601()
         ensure_registry(hby, hab, rgy, name=registry_name)
         counselor = grouping.Counselor(hby=hby)

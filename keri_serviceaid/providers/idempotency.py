@@ -36,6 +36,8 @@ class DynamoLedger:
         raw = self.proc.get(keys=(said,))
         if raw is None:
             return None
+        # Suber.get decodes the stored value to a str; CESR text is ASCII, so the
+        # bytes->str->bytes round-trip is lossless. Re-encode to return bytes.
         return raw.encode("utf-8") if isinstance(raw, str) else bytes(raw)
 
     def record(self, said: str, grant: bytes) -> None:

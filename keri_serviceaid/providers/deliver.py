@@ -45,6 +45,8 @@ class PostmanDeliverer:
 
         if self._poster is None:
             # Drive the real Poster's deliverDo to completion (it queues then posts).
+            # NOTE: Doist.do(doers=...) replaces self.doers, so the doer is entered
+            # exactly once here — do NOT also pass doers= to the constructor.
             from hio.base import doing
-            doist = doing.Doist(real=False, tock=0.03125, limit=8.0, doers=[poster])
+            doist = doing.Doist(real=False, tock=0.03125, limit=8.0)
             doist.do(doers=[poster])
