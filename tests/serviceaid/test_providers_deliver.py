@@ -1,0 +1,37 @@
+"""PostmanDeliverer enqueues the grant on a Poster with the right dest/topic."""
+from keri.core import serdering
+from keri_serviceaid import PostmanDeliverer, Endpoint, Context
+
+
+class FakePoster:
+    def __init__(self):
+        self.calls = []
+
+    def send(self, dest, topic, serder, src=None, hab=None, attachment=None):
+        self.calls.append(dict(dest=dest, topic=topic, serder=serder,
+                               src=src, hab=hab, attachment=attachment))
+
+
+def test_deliver_calls_poster_send_with_dest_and_topic():
+    poster = FakePoster()
+    deliverer = PostmanDeliverer(poster=poster)
+
+    from keri.app.habbing import Habery
+    from keri.core.signing import Salter
+    from keri.peer import exchanging
+    hby = Habery(name="svc", temp=True, salt=Salter(raw=b'0123456789abcdef').qb64)
+    hab = hby.makeHab(name="svc", transferable=True)
+    exn, _ = exchanging.exchange(route="/ipex/grant", attributes={}, sender=hab.pre)
+    msg = bytearray(exn.raw)
+
+    ep = Endpoint(role="mailbox", eid="EMbx", url="https://mailbox.keri.host")
+    ctx = Context(hby=hby, hab=hab, rgy=None, registry_name="svc")
+    deliverer.deliver(bytes(msg), ep, ctx)
+
+    assert len(poster.calls) == 1
+    call = poster.calls[0]
+    assert call["dest"] == "EMbx"            # deliver to the resolved endpoint provider
+    assert call["topic"] == "credential"
+    assert call["hab"] is hab
+    assert isinstance(call["serder"], serdering.SerderKERI)
+    hby.close()

@@ -1,11 +1,42 @@
-"""IdempotencyStore Protocol + DynamoLedger default (Task 1 stub; Task 3 impl)."""
+"""IdempotencyStore extension point + DynamoLedger default.
+
+Records the SIGNED GRANT bytes keyed by the inbound exn SAID. `record` happens
+AFTER issue but BEFORE deliver, so a delivery failure + client re-send hits
+seen() and RE-DELIVERS the same grant (never re-issues) → exactly-once issuance,
+at-least-once delivery. Stores raw CESR grant bytes (not a JSON summary) so the
+replay path can re-deliver the identical message."""
 from __future__ import annotations
 
+from typing import Protocol, runtime_checkable
 
-class IdempotencyStore:  # Protocol promoted to a class in Task 3
-    pass
+from keri.db import subing
+
+PROC_STORE = "proc."
+
+
+@runtime_checkable
+class IdempotencyStore(Protocol):
+    def seen(self, said: str) -> bytes | None:
+        """Return the prior recorded grant for `said`, or None if unseen."""
+        ...
+
+    def record(self, said: str, grant: bytes) -> None:
+        """Pin the grant for `said` (overwriting any prior entry)."""
+        ...
 
 
 class DynamoLedger:
+    """Default idempotency store on a DynamoDBer opened with PROC_STORE."""
+
     def __init__(self, db):
         self.db = db
+        self.proc = subing.Suber(db=db, subkey=PROC_STORE)
+
+    def seen(self, said: str) -> bytes | None:
+        raw = self.proc.get(keys=(said,))
+        if raw is None:
+            return None
+        return raw.encode("utf-8") if isinstance(raw, str) else bytes(raw)
+
+    def record(self, said: str, grant: bytes) -> None:
+        self.proc.pin(keys=(said,), val=bytes(grant))

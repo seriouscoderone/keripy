@@ -34,6 +34,7 @@ class Reply:
     edges: Optional[dict] = None
     rules: Optional[dict] = None
     reason: Optional[str] = None
+    schema_said: Optional[str] = None
 
     @classmethod
     def acdc(cls, *, recipient: str, attributes: dict,
