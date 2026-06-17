@@ -43,9 +43,9 @@ _state = None  # warm singleton across invocations
 @dataclass
 class RuntimeState:
     cfg: Config
-    hby: object
-    hab: object
-    rgy: object
+    hby: Habery
+    hab: object          # the service Hab (Habery.makeHab return type)
+    rgy: object          # credentialing.Regery
     svc: ServiceAid
 
 
@@ -78,6 +78,9 @@ class _CaptureHandler:
         self.captured.append((serder, attachments or []))
 
     def drain(self):
+        """Return all captured exns and clear the buffer (sole read path —
+        prevents a stale capture from a prior request leaking into a later
+        response on a warm Lambda)."""
         out, self.captured = self.captured, []
         return out
 
@@ -125,19 +128,21 @@ def incept_or_load(hby, cfg: Config):
     hby.prefixes.add(hab.pre)
 
     if hab.kever.wits:
-        # Synchronous /receipts collection on a real-time Doist with a deadline.
+        # Synchronous /receipts collection. Drive Receiptor the keripy-native
+        # way: yield-from receiptor.receipt(...) inside a Doer that the Doist
+        # schedules, then run the Doist via .do(limit=30) so real-time pacing
+        # AND the 30s deadline are actually enforced (a hand-rolled next()/recur
+        # loop bypasses both — real sleeping and the limit check live only in
+        # Doist.do). If witnesses are unreachable, .do returns at the deadline
+        # rather than burning the whole Lambda timeout.
         receiptor = agenting.Receiptor(hby=hby)
-        doist = doing.Doist(real=True, tock=0.03125, limit=30.0, doers=[receiptor])
-        deeds = doist.enter(doers=[receiptor])
-        gen = receiptor.receipt(hab.pre, sn=0)
-        try:
-            while True:
-                next(gen)
-                doist.recur(deeds=deeds)
-        except StopIteration:
-            pass
-        finally:
-            doist.exit(deeds=deeds)
+
+        def _collect(tymth=None, tock=0.0, **kwa):
+            yield from receiptor.receipt(hab.pre, sn=0)
+
+        collector = doing.doify(_collect)
+        doist = doing.Doist(real=True, tock=0.03125, limit=30.0)
+        doist.do(doers=[receiptor, collector], limit=30.0)
     return hab
 
 
@@ -152,6 +157,12 @@ def _publish_end_role_and_oobi(hby, hab):
 
 
 def init(cfg: Config | None = None) -> RuntimeState:
+    """Cold start: open the keripy stack on DynamoDB (shared KEL oracle + private
+    namespaces), open the keeper from Secrets Manager, build the Habery,
+    incept-or-load the witnessed AID + registry, import the developer's
+    compute_code module (handler_ref module:attr), wire default providers, and
+    register a capture behavior per route. Warm invocations reuse the singleton.
+    Never call at module import time (the keeper secret is fetched here)."""
     global _state
     if _state is not None:
         return _state
@@ -178,7 +189,7 @@ def init(cfg: Config | None = None) -> RuntimeState:
         logger.warning("keeper secret %s has no bran — keeper UNENCRYPTED",
                        cfg.keeper_secret)
 
-    cf = Configer(name=cfg.alias, temp=True)
+    cf = Configer(name=cfg.alias, temp=True)  # Lambda: filesystem only in /tmp
     hby = Habery(name=cfg.alias, temp=False, free=True, db=db, ks=ks, cf=cf,
                  salt=ks.salt, bran=ks.bran)
 

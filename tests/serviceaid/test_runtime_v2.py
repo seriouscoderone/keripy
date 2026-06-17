@@ -3,7 +3,6 @@ read, and the Receiptor (never WitnessReceiptor) regression guard."""
 import inspect
 
 import boto3
-import pytest
 from moto import mock_aws
 
 from keri.db.dynamodbing import DynamoDBer
