@@ -9,7 +9,11 @@ service Function's role the canonical CDK way.
 Build BOTH layers before `cdk deploy` (see DEPLOY_RUNBOOK.md):
   keri_cdk/layers/build_layer.sh
   keri_cdk/layers/build_framework_layer.sh
-Pass --context allowlist='["EReqAID", ...]' to gate by sender AID (empty ⇒ any)."""
+
+Authz lives in the developer's compute_code, not a CDK knob: edit the
+`Allowlist([...])` passed to `ServiceAid(...)` in gated_handler.py to gate by
+sender AID (an empty allowlist accepts any verified sender). Witnesses/toad ARE
+deploy-time concerns and are read from cdk context below."""
 import pathlib
 import sys
 

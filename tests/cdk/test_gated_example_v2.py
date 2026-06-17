@@ -46,14 +46,19 @@ def test_app_imports_and_builds():
     We create minimal placeholder dirs (a python/ subdir each) so CDK can stage
     them. These dirs are gitignored so they will not be committed."""
     import pathlib
-    import tempfile
+    import shutil
 
     root = pathlib.Path(__file__).resolve().parents[2]
 
     # Ensure layer placeholder dirs exist (gitignored; CDK needs them to synth).
+    # Track which we create so we can remove only those in the finally block,
+    # leaving any real built layer assets untouched.
     keri_runtime_dir = root / "keri_cdk" / "layers" / "keri_runtime"
     framework_dir = root / "keri_cdk" / "layers" / "serviceaid_framework"
+    created = []
     for layer_dir in (keri_runtime_dir, framework_dir):
+        if not layer_dir.exists():
+            created.append(layer_dir)
         (layer_dir / "python").mkdir(parents=True, exist_ok=True)
 
     path = str(root / "examples" / "gated_retrieval")
@@ -66,3 +71,5 @@ def test_app_imports_and_builds():
         sys.path.remove(path)
         sys.modules.pop("app", None)
         sys.modules.pop("gated_handler", None)
+        for layer_dir in created:   # remove only the placeholders we created
+            shutil.rmtree(layer_dir, ignore_errors=True)
