@@ -13,8 +13,17 @@ relocated code without per-test edits.
 """
 import sys
 
+import pytest
+
 from keri_cdk.handlers.mailbox import mailbox_handler as _mailbox_handler
 from keri_cdk.handlers.witness import witness_handler as _witness_handler
 
 sys.modules.setdefault("mailbox_handler", _mailbox_handler)
 sys.modules.setdefault("witness_handler", _witness_handler)
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "integration: requires a moto cold-start or real AWS (deselected by default)",
+    )

@@ -18,7 +18,13 @@ assertions, and tears them down. It touches none of your existing KERI stacks.
    `index/*`, gated by `ForAllValues:StringLike` on `dynamodb:LeadingKeys`
    = `["{alias}:*#*", "__meta__#{alias}:*"]`. (No `Scan`.)
 3. Seeds both tenants with a normal item and a `__meta__` item, reproducing
-   `DynamoDBer`'s real key shapes (see `probe.py` header).
+   `DynamoDBer`'s real key shapes (see `probe.py` header).  The probe also
+   seeds the **reachability stores** (`ends.`, `locs.`, `eans.`) into the
+   `shared#` namespace (not any tenant's private namespace), reproducing the
+   Task 7 oracle change (Task 7 adds these three stores to `SHARED_KEL_STORES`
+   in `src/keri/app/lambding.py` so the oracle is reachability-complete: a
+   Service-AID can resolve an in-domain peer's mailbox/controller endpoint from
+   one local `endsFor` read).
 4. Assumes tenant A's role and asserts (the decisive one in **bold**):
    - base table, own PK → ALLOW
    - base table, tenant B's PK → DENY
@@ -27,6 +33,14 @@ assertions, and tears them down. It touches none of your existing KERI stacks.
    - GSI, the shared `__meta__` `gsi_pk` → must DENY
    - `Scan` (table and index) → DENY
    - GetItem on tenant B → DENY
+   - shared `ends.` base read (reachability) → ALLOW (intentionally pooled)
+   - shared `locs.` base read (reachability) → ALLOW (intentionally pooled)
+   - shared `eans.` base read (reachability) → ALLOW (intentionally pooled)
+
+A tenant whose policy grants `shared#*` CAN read `shared#ends.` /
+`shared#locs.` / `shared#eans.` — reachability is intentionally pooled across
+all in-domain services. The cross-tenant DENY assertions are unchanged: a
+tenant CANNOT read another tenant's PRIVATE namespace.
 
 If the crux is DENIED, the pooled design is sound. If ALLOWED, the index
 boundary is vacuous (cross-tenant read) and the design needs rework

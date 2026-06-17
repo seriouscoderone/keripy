@@ -64,6 +64,12 @@ BASER_STORES = [
 SHARED_KEL_STORES = frozenset({
     "evts.", "fels.", "kels.", "dtss.", "sigs.", "wigs.", "rcts.", "vrcs.",
     "aess.", "fons.", "wits.", "stts.", "ksns.", "knas.",
+    # Reachability (end-role / location / endpoint-auth): pooling these makes the
+    # oracle REACHABILITY-COMPLETE so a Service-AID resolves an in-domain peer's
+    # mailbox/controller endpoint from one local endsFor read (path-(c)). These
+    # are public authorization records, NOT confidential — disjoint from
+    # NEVER_SHARE_STORES. See 2026-06-17-service-aid-framework-design.md.
+    "ends.", "locs.", "eans.",
 })
 
 #  Keeper stores (keeping.py)
