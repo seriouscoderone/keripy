@@ -25,6 +25,9 @@ docker run --rm --platform linux/arm64 \
     set -e
     # Install ONLY keri_serviceaid into python/ with no deps (keri + native libs
     # ride in KeriRuntimeLayer; bundling them again would bloat + shadow).
+    # keri_serviceaid currently has NO package metadata (no pyproject/setup), so
+    # the pip install fails and the cp -R is the LIVE install path today; the pip
+    # form is kept so a future packaged keri_serviceaid installs cleanly.
     pip install --no-cache-dir --no-deps \
       ./keri_serviceaid -t /work/keri_cdk/layers/serviceaid_framework/python \
       2>/dev/null || \
@@ -32,6 +35,7 @@ docker run --rm --platform linux/arm64 \
 
     PY=/work/keri_cdk/layers/serviceaid_framework/python
     find "$PY" -type d -name "__pycache__" -prune -exec rm -rf {} + 2>/dev/null || true
+    find "$PY" -type d -name "tests" -prune -exec rm -rf {} + 2>/dev/null || true
     find "$PY" -type d -name "*.dist-info" -prune -exec rm -rf {} + 2>/dev/null || true
   '
 
