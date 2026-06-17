@@ -49,8 +49,7 @@ class OracleVerifier:
                 "watcher (tier-3) verification is a named follow-on (keri_cdk "
                 "watcher seam); use tier 'signed' or 'receipts'")
 
-        kever = hby.kevers.get(sender) if hasattr(hby.kevers, "get") else (
-            hby.kevers[sender] if sender in hby.kevers else None)
+        kever = hby.kevers.get(sender)
         if kever is None:
             raise VerificationError(
                 f"no key state for {sender} in the oracle (first-contact KEL not "

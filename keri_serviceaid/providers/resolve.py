@@ -47,7 +47,9 @@ class OracleResolver:
         self.fallback = fallback if fallback is not None else [InStream(), Oobi()]
 
     def resolve(self, sender: str, hby) -> Endpoint:
-        hab = next(iter(hby.habs.values()))   # the single service hab
+        hab = next(iter(hby.habs.values()), None)   # the single service hab
+        if hab is None:
+            raise LookupError("service hab not initialised")
         ends = hab.endsFor(sender)            # role -> eid -> scheme -> url
         for role in _ROLE_PRIORITY:
             if role in ends and ends[role]:

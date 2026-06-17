@@ -58,6 +58,14 @@ def test_receipts_tier_accepts_when_receipts_present():
     assert ks.tier == "receipts"
 
 
+def test_receipts_tier_accepts_unwitnessed_aid():
+    # an UNwitnessed AID (no wits) passes at tier 'receipts' without needing
+    # receipts — the gate keys off `if wits`, not `if wits is not None`.
+    hby = FakeHby("EReq", has_wigs=False, wits=[])
+    ks = OracleVerifier(tier="receipts").verify("EReq", b"", hby)
+    assert ks.pre == "EReq" and ks.tier == "receipts"
+
+
 def test_watcher_tier_not_implemented():
     hby = FakeHby("EReq", has_wigs=True, wits=["EWit"])
     with pytest.raises(NotImplementedError):
