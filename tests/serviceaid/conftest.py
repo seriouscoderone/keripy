@@ -2,8 +2,16 @@
 import os
 import sys
 import tempfile
+from unittest.mock import MagicMock
 
 import pytest
+
+# keri_cdk._inception is a pure-Python module that needs the keri_cdk package
+# to be importable, but keri_cdk/__init__.py pulls in CDK constructs (aws_cdk,
+# constructs) which are not installed in the test venv. Pre-stub them so that
+# `import keri_cdk._inception` succeeds in any test that needs to monkeypatch it.
+for _cdk_mod in ("aws_cdk", "constructs"):
+    sys.modules.setdefault(_cdk_mod, MagicMock())
 
 os.environ.setdefault("HOME", tempfile.mkdtemp(prefix="serviceaid-test-"))
 
@@ -52,3 +60,8 @@ def recipient_pre(issuer_hby):
     issuer_hby.kvy.processEscrows()
     assert pre in issuer_hby.kevers
     return pre
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers",
+                            "integration: requires a moto cold-start (deselected by default)")
