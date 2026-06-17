@@ -69,6 +69,11 @@ SHARED_KEL_STORES = frozenset({
     # mailbox/controller endpoint from one local endsFor read (path-(c)). These
     # are public authorization records, NOT confidential — disjoint from
     # NEVER_SHARE_STORES. See 2026-06-17-service-aid-framework-design.md.
+    # NOTE: `lans.` (location-auth SAID index) is intentionally NOT pooled: it is
+    # a write-side dedup index for /loc/scheme replies, not part of the read path
+    # (endsFor/fetchUrls read `locs.`, never `lans.`). The Service-AID only READS
+    # the oracle for peer reachability, so pooling `lans.` is unnecessary; pooling
+    # it would only matter for an oracle WRITER, which is out of scope here.
     "ends.", "locs.", "eans.",
 })
 
