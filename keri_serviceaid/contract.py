@@ -1,40 +1,124 @@
-"""Developer contract (Task 1 stub; fully implemented in Task 2)."""
+"""Developer-facing contract: ServiceAid registry, Request, Reply, Command,
+TestRuntime. No keripy import at module top (register_schema imports lazily) so
+this stays cheap to import in the dev's compute_code module."""
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 
 @dataclass
 class Request:
-    sender: str
-    route: str
-    payload: dict
-    credentials: list = field(default_factory=list)
-    message_said: str = ""
-    key_state: object = None
+    """Verified, authorized inbound request handed to a developer function."""
+    sender: str                       # verified caller AID prefix
+    route: str                        # the signed exn `r`
+    payload: dict                     # verified exn attributes (the `a` block)
+    credentials: list = field(default_factory=list)  # verified presented ACDCs ([] under Allowlist)
+    message_said: str = ""            # exn SAID — the idempotency key
+    key_state: object = None          # resolved sender KeyState (assurance tier)
+
+    def now(self) -> str:
+        from keri.help import helping
+        return helping.nowIso8601()
 
 
 @dataclass
 class Reply:
-    kind: str
+    """Declarative reply. The framework performs issuance/signing/grant framing."""
+    kind: str                         # "acdc" | "none" | "reject"
     recipient: Optional[str] = None
     attributes: Optional[dict] = None
     edges: Optional[dict] = None
     rules: Optional[dict] = None
     reason: Optional[str] = None
 
+    @classmethod
+    def acdc(cls, *, recipient: str, attributes: dict,
+             edges: dict | None = None, rules: dict | None = None) -> "Reply":
+        return cls(kind="acdc", recipient=recipient, attributes=attributes,
+                   edges=edges, rules=rules)
+
+    @classmethod
+    def none(cls) -> "Reply":
+        return cls(kind="none")
+
+    @classmethod
+    def reject(cls, *, reason: str) -> "Reply":
+        return cls(kind="reject", reason=reason)
+
 
 @dataclass
 class Command:
     route: str
-    payload_schema: Optional[dict]
-    issues: str
+    payload_schema: Optional[dict]    # optional JSON-Schema for the `a` block (YAGNI: not enforced in v1)
+    issues: str                       # ACDC schema SAID this command may issue
     fn: Callable[[Request], Reply]
 
 
 class ServiceAid:
-    pass
+    """The declared entity: identity config + injected providers + command
+    registry. The dev names it (`svc = ServiceAid(...)`); the framework finds it
+    via the `module:attr` entry ref. Providers left None get their default wired
+    in the runtime (here we just store None)."""
+
+    def __init__(self, *, alias: str, witnesses: list[str] | None = None,
+                 toad: int = 0, authz=None, verifier=None, resolver=None,
+                 issuer=None, deliverer=None, idempotency=None):
+        self.alias = alias
+        self.witnesses = witnesses or []
+        self.toad = toad
+        self.authz = authz
+        self.verifier = verifier
+        self.resolver = resolver
+        self.issuer = issuer
+        self.deliverer = deliverer
+        self.idempotency = idempotency
+        self._commands: dict[str, Command] = {}
+        self.schemas: list[dict] = []   # ACDC schema SADs to register at init
+
+    def command(self, *, route: str, issues: str = "",
+                payload_schema: dict | None = None):
+        if route.startswith("/ipex/"):
+            raise ValueError(f"route {route!r} is reserved: /ipex/* is owned by "
+                             "the IPEX protocol and may not be a command route")
+
+        def deco(fn: Callable[[Request], Reply]):
+            if route in self._commands:
+                raise ValueError(f"duplicate route registered: {route}")
+            self._commands[route] = Command(route=route, payload_schema=payload_schema,
+                                             issues=issues, fn=fn)
+            return fn
+        return deco
+
+    def register_schema(self, sad: dict) -> str:
+        """Saidify an ACDC schema SAD, queue it for db registration, return its SAID."""
+        from keri.core import scheming
+        from keri.kering import Kinds
+        schemer = scheming.Schemer(sed=dict(sad), kind=Kinds.json)
+        self.schemas.append(dict(schemer.sed))
+        return schemer.said
+
+    def lookup(self, route: str) -> Optional[Command]:
+        return self._commands.get(route)
+
+    @property
+    def routes(self) -> list[str]:
+        return list(self._commands)
 
 
 class TestRuntime:
-    __test__ = False
+    """In-memory runtime for unit-testing developer command functions without keripy."""
+
+    __test__ = False  # do not collect as a pytest suite
+
+    def __init__(self, svc: ServiceAid):
+        self.svc = svc
+
+    def send(self, *, route: str, sender: str, payload: dict,
+             credentials: list | None = None) -> Reply:
+        cmd = self.svc.lookup(route)
+        if cmd is None:
+            raise KeyError(f"no command for route {route}")
+        req = Request(sender=sender, route=route, payload=payload,
+                      credentials=credentials or [], message_said="EtestMsg")
+        return cmd.fn(req)
