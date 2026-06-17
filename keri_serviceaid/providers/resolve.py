@@ -47,9 +47,14 @@ class OracleResolver:
         self.fallback = fallback if fallback is not None else [InStream(), Oobi()]
 
     def resolve(self, sender: str, hby) -> Endpoint:
-        hab = next(iter(hby.habs.values()), None)   # the single service hab
-        if hab is None:
+        # One Service-AID = one hab per process. Guard the assumption: a stray
+        # second hab would otherwise make the endpoint pick a silent coin-flip.
+        habs = list(hby.habs.values())
+        if not habs:
             raise LookupError("service hab not initialised")
+        if len(habs) > 1:
+            raise LookupError(f"expected exactly one service hab, found {len(habs)}")
+        hab = habs[0]
         ends = hab.endsFor(sender)            # role -> eid -> scheme -> url
         for role in _ROLE_PRIORITY:
             if role in ends and ends[role]:

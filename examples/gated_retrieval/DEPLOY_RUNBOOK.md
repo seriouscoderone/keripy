@@ -10,6 +10,12 @@ real inbound exn; (4) Postman delivery to a real mailbox (mailbox.keri.host);
 - AWS creds for the target account (`AWS_PROFILE=...`), region with python3.14 Lambda.
 - Docker (for the arm64 layer builds).
 - A test requester keystore (kli) that can sign exns and poll a mailbox via SSE.
+- Deploy-layout contract: the inception Custom Resource shares the service
+  Function, whose handler routes `RequestType` events to `keri_cdk._inception`.
+  That module must be importable from the deployed asset — either `keri_cdk` is on
+  the path or `_inception.py` rides flat in the asset (`/var/task`). The example's
+  `app.py` uses the example dir as `compute_code`; confirm `_inception` resolves at
+  deploy (a CR failure with an ImportError here means the asset is missing it).
 
 ## 1. Build BOTH layers (arm64, in Docker)
 ```bash
