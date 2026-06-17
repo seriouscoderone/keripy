@@ -68,7 +68,9 @@ def handler(event, context):
         return {"statusCode": 400}
 
     try:
-        state.hby.psr.parse(ims=bytearray(ims), framed=True)
+        # _reassemble_cesr returns a fresh bytearray (never read again after this),
+        # so no defensive copy is needed before the parser consumes it.
+        state.hby.psr.parse(ims=ims, framed=True)
         state.hby.kvy.processEscrows()
         state.hby.exc.processEscrow()
     except Exception:
