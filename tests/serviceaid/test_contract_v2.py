@@ -30,6 +30,7 @@ def test_duplicate_route_raises():
     def a(req): return Reply.none()
 
     with pytest.raises(ValueError, match="duplicate route"):
+        # the duplicate-route ValueError fires at DECORATION time, before b() runs
         @svc.command(route="/mvr/cmd/x")
         def b(req): return Reply.none()
 
@@ -76,3 +77,11 @@ def test_testruntime_unknown_route_raises():
     rt = TestRuntime(_svc())
     with pytest.raises(KeyError):
         rt.send(route="/nope", sender="E", payload={})
+
+
+def test_request_now_returns_iso8601_timestamp():
+    req = Request(sender="EReq", route="/x", payload={})
+    ts = req.now()
+    assert isinstance(ts, str)
+    # iso8601 with date + 'T' separator (e.g. 2026-06-17T...)
+    assert "T" in ts and ts[:4].isdigit() and ts[4] == "-"

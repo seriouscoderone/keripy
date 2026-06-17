@@ -18,6 +18,9 @@ class Request:
     key_state: object = None          # resolved sender KeyState (assurance tier)
 
     def now(self) -> str:
+        """Convenience: current RFC-3339/iso8601 timestamp, so a developer
+        command function can stamp `dt` on reply attributes without importing
+        keripy itself. Lazy-imports keripy (keeps module import cheap)."""
         from keri.help import helping
         return helping.nowIso8601()
 
@@ -49,8 +52,10 @@ class Reply:
 
 @dataclass
 class Command:
+    """Route → handler binding. `payload_schema` is an optional JSON-Schema for
+    the `a` block; it is YAGNI in v1 (stored but not enforced) and promotable later."""
     route: str
-    payload_schema: Optional[dict]    # optional JSON-Schema for the `a` block (YAGNI: not enforced in v1)
+    payload_schema: Optional[dict]
     issues: str                       # ACDC schema SAID this command may issue
     fn: Callable[[Request], Reply]
 
