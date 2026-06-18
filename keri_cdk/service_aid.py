@@ -1,79 +1,34 @@
-"""ServiceAid construct: per-service zip+layer Lambda + API Gateway + scoped IAM
-+ keeper + inception Custom Resource, over the shared (pooled) KERI core table.
+"""ServiceAidFunction construct: one Service-AID = a python3.14/arm64 zip Lambda
+(the dev's compute_code) riding TWO layers — KeriRuntimeLayer (libsodium + keripy)
+and ServiceAidFrameworkLayer (keri_serviceaid) — over the shared pooled core table.
 
-Deployment shape (Phase B): a python3.14 / arm64 **zip** Lambda riding the shared
-``KeriRuntimeLayer`` (libsodium + keripy native deps at /opt). No Docker at
-deploy time — mirrors WitnessStack / MailboxStack.
+The handler resolves from the framework layer (keri_serviceaid.handler.handler);
+the dev's compute_code module (handler_ref module:attr, e.g. "gated_handler:svc")
+ships in the asset. iam.IGrantable lets adopters grant their own resources to the
+Function the canonical CDK way: my_lookup.grant_read_data(svc).
 
-Cross-stack core-table lock (the lifecycle LOCK)
-------------------------------------------------
-``core_table`` is an ``ITable`` passed in from a DIFFERENT stack (typically
-``KeriCoreStack(...).table``). Referencing ``core_table.table_arn`` /
-``core_table.table_name`` across a stack boundary makes CDK automatically emit a
-CloudFormation ``Export`` on the owning stack and an ``Fn::ImportValue`` here —
-so this service stack can never be deleted while the core table's export is
-consumed, and the pooled table outlives any single service. (Both stacks need a
-concrete ``env`` account/region for the cross-stack reference to resolve to an
-``Fn::ImportValue`` rather than a token.)
+Inherited unchanged from Phase B/C:
+  - cross-stack core-table lifecycle LOCK (core_table: ITable across a stack
+    boundary -> Export/Fn::ImportValue);
+  - four-pattern dynamodb:LeadingKeys union (shared#*, __meta__#shared#*,
+    {alias}:*#*, __meta__#{alias}:*);
+  - keeper-secret IAM scoped to keri/<alias>/*;
+  - inception Custom Resource (the Function doubles as on_event);
+  - API Gateway CESR ingest (binary_media_types, proxy, 204).
 
-Developer business compute (``handler_module``)
------------------------------------------------
-``runtime.init()`` does ``importlib.import_module(handler_module)``, so the
-developer's handler file must sit on the Lambda's import path (the asset dir,
-extracted to /var/task). ``handler_code_path`` is the asset directory; it
-defaults to the serviceaid runtime dir (``keri_cdk/handlers/serviceaid``), which
-carries ``handler.py`` (the entrypoint), ``bootstrap.py`` (libsodium shim),
-``_inception``-import shim, and the runtime modules.
-
-SYNTH-LEVEL / Task 9 bundling note: at synth time we only assert the Lambda's
-shape. The consuming app's ``handler_module`` file (e.g. ``gated_handler.py``)
-plus a ``serviceaid`` import shim and ``_inception.py`` must be *co-located in
-the asset directory* for a real deploy. The clean Task 9 approach is to point
-``handler_code_path`` at a single staging dir that contains the serviceaid
-runtime files + the developer handler (built by a small bundling step), or to
-add the developer file to the serviceaid asset via CDK BundlingOptions. The
-default keeps synth single-sourced; the example (examples/gated_retrieval) ships
-``gated_handler.py`` + schemas alongside and documents this seam.
-
-Keeper
-------
-The keeper lives in ONE KMS-encrypted Secrets Manager secret per service,
-``keri/<alias>/keeper`` (JSON ``{v, salt, bran, keeper-blob}``). This construct
-does NOT create that secret in CloudFormation — the inception Custom Resource
-get-or-creates it at deploy time (race-safe, create-only) so the salt/bran exist
-before the first incept and survive stack churn. The construct only sets
-``SERVICEAID_KEEPER_SECRET`` (the secret name) and grants scoped Secrets Manager
-access on ``keri/<alias>/*``.
-
-Multi-tenant core-table scoping
--------------------------------
-IAM access to the pooled core table is scoped to this service's namespace
-prefixes via ``dynamodb:LeadingKeys``:
-
-* ``{alias}:*#*``        – KEL + TEL rows
-* ``__meta__#{alias}:*`` – keripy meta rows
-
-Inception
----------
-A CloudFormation Custom Resource reuses the service Lambda as its
-``on_event_handler``. ``handler.py`` routes events carrying a ``RequestType``
-key to ``keri_cdk._inception.on_event``, so no separate CR Lambda is needed.
-``cr.Provider`` does synthesise its own framework Lambda — test assertions
-should match functions by ``FunctionName`` rather than counting all Lambdas.
-
-Authorization
--------------
-``allowlist`` is the set of sender AIDs permitted to invoke this service
-(comma-joined into ``SERVICEAID_ALLOWLIST``; empty ⇒ any verified sender).
-``required_schema`` is DEFERRED in v1 — the handler does not yet extract
-caller-presented ACDCs, so a non-empty value would deny all requests; leave it
-unset. Use ``allowlist`` for v1 sender gating.
-"""
+Real-deploy UNKNOWN (validated in Task 11): a layer-resident handler
+(keri_serviceaid.handler.handler at /opt/python) importing the dev's /var/task
+compute_code which imports the framework layer, with libsodium from
+KeriRuntimeLayer (/opt/lib). FALLBACK if Lambda will not resolve a layer-resident
+handler: a 3-line shim handler.py is auto-injected into the asset
+(inject_handler_shim) so the deploy is robust either way; the handler string
+stays "keri_serviceaid.handler.handler" and the shim is a redundant safety net."""
 from __future__ import annotations
 
 import os
 import re
 
+import jsii
 from aws_cdk import Aws, Duration, CustomResource
 from aws_cdk import aws_lambda as _lambda
 from aws_cdk import aws_apigateway as apigw
@@ -84,18 +39,26 @@ from constructs import Construct
 
 try:
     from .runtime_layer import KeriRuntimeLayer
-except ImportError:  # pragma: no cover - direct-module import fallback
+    from .framework_layer import ServiceAidFrameworkLayer
+except ImportError:  # pragma: no cover
     from keri_cdk.runtime_layer import KeriRuntimeLayer
-
-# The serviceaid Lambda asset (handler.py + bootstrap.py + runtime modules).
-# Default code path; the developer's handler_module file is bundled alongside
-# for a real deploy (see module docstring / Task 9).
-_HANDLER_DIR = os.path.join(os.path.dirname(__file__), "handlers", "serviceaid")
+    from keri_cdk.framework_layer import ServiceAidFrameworkLayer
 
 
-class ServiceAid(Construct):
-    """One Service AID: zip+layer Lambda over the shared core table (own
-    namespace) + a keeper secret + inception Custom Resource."""
+# DO NOT change this to `class ServiceAidFunction(Construct, iam.IGrantable)`:
+# direct multiple inheritance raises a jsii metaclass conflict (JSIIMeta vs the
+# Protocol's _ProtocolMeta). @jsii.implements is the canonical jsii way to
+# declare a construct satisfies an interface.
+@jsii.implements(iam.IGrantable)
+class ServiceAidFunction(Construct):
+    """One Service-AID Function: compute_code zip + two layers over the shared
+    core table (own namespace) + keeper secret + inception Custom Resource.
+
+    Authz note: there is no `allowlist`/`required_schema` constructor param (unlike
+    the retired ServiceAid). Authorization is now a keri_serviceaid PROVIDER
+    concern — the dev declares it on the ServiceAid in compute_code (e.g.
+    `Allowlist([...])`), or overrides via the `environment` dict if a provider
+    reads env. The construct only wires infrastructure + the framework env keys."""
 
     def __init__(
         self,
@@ -104,150 +67,98 @@ class ServiceAid(Construct):
         *,
         alias: str,
         core_table: ddb.ITable,
-        handler_module: str,
+        compute_code: _lambda.Code,
+        handler_ref: str = "service:svc",
         witnesses: list[str] | None = None,
         toad: int = 0,
-        allowlist: list[str] | None = None,
-        required_schema: str = "",
-        handler_code_path: str = _HANDLER_DIR,
         runtime_layer: KeriRuntimeLayer | None = None,
+        framework_layer: ServiceAidFrameworkLayer | None = None,
+        environment: dict | None = None,
         memory: int = 1024,
         timeout_seconds: int = 120,
+        vpc=None,
+        extra_layers: list | None = None,
         **kw,
     ):
         super().__init__(scope, cid, **kw)
         if not re.fullmatch(r"[a-z0-9-]+", alias):
-            raise ValueError(f"alias must match [a-z0-9-]+ (got {alias!r}) — "
-                             "it is interpolated into IAM LeadingKeys patterns")
+            raise ValueError(f"alias must match [a-z0-9-]+ (got {alias!r}) — it is "
+                             "interpolated into IAM LeadingKeys patterns")
         witnesses = witnesses or []
 
-        # ── Cross-stack core table (the lifecycle LOCK) ────────────────────────
-        # core_table is passed in from another stack; referencing its arn/name
-        # across the boundary makes CDK emit the Export/Fn::ImportValue lock.
+        klayer = (runtime_layer or KeriRuntimeLayer(self, "Runtime")).layer
+        flayer = (framework_layer or ServiceAidFrameworkLayer(self, "Framework")).layer
 
-        # ── Layer ──────────────────────────────────────────────────────────────
-        layer = (runtime_layer or KeriRuntimeLayer(self, "Runtime")).layer
-
-        env = {
+        framework_env = {
             "SERVICEAID_ALIAS": alias,
             "SERVICEAID_CORE_TABLE": core_table.table_name,
             "SERVICEAID_KEEPER_SECRET": f"keri/{alias}/keeper",
             "SERVICEAID_WITNESSES": ",".join(witnesses),
             "SERVICEAID_TOAD": str(toad),
-            "SERVICEAID_ALLOWLIST": ",".join(allowlist or []),
-            "SERVICEAID_REQUIRED_SCHEMA": required_schema,
-            "SERVICEAID_HANDLER": handler_module,
-            # config._dynamo_kwa passes region=cfg.region explicitly to boto3,
-            # and cfg.region defaults to "us-east-1" when this env var is absent
-            # — which would override Lambda's real AWS_REGION. Set it to the real
-            # region token so boto3 targets the deploy region.
+            "SERVICEAID_HANDLER": handler_ref,     # module:attr
             "SERVICEAID_REGION": Aws.REGION,
-            # libsodium ships in the KeriRuntimeLayer at /opt/lib (zip+layer
-            # shape), reachable via LD_LIBRARY_PATH. bootstrap.ensure_libsodium()
-            # also patches find_library to this path.
             "LD_LIBRARY_PATH": "/opt/lib",
         }
+        env = {**framework_env, **(environment or {})}
 
-        # ── Service Lambda (zip + KeriRuntimeLayer) ──────────────────────────────
-        # python3.14 + arm64: keripy pins python_requires>=3.14.0.
-        # reserved_concurrent_executions=1: single-writer guarantee per service AID
-        # (mirrors WitnessStack — the AID's KEL/keeper must not race across
-        # concurrent cold starts).
         fn = _lambda.Function(
-            self,
-            "Function",
+            self, "Function",
             function_name=f"{alias}-serviceaid",
             runtime=_lambda.Runtime.PYTHON_3_14,
             architecture=_lambda.Architecture.ARM_64,
-            handler="handler.handler",
-            code=_lambda.Code.from_asset(handler_code_path),
-            layers=[layer],
+            handler="keri_serviceaid.handler.handler",   # resolves from framework layer
+            code=compute_code,
+            layers=[klayer, flayer, *(extra_layers or [])],
             reserved_concurrent_executions=1,
             memory_size=memory,
             timeout=Duration.seconds(timeout_seconds),
             environment=env,
+            vpc=vpc,
         )
 
-        # ── IAM ──────────────────────────────────────────────────────────────────
-        # Keeper secret: scoped to this service's keri/<alias>/* namespace. The
-        # fn doubles as the inception CR handler, so it needs both read
-        # (steady-state runtime) and create/put (CR get-or-create).
+        # Keeper secret scoped to keri/<alias>/* (fn doubles as the inception CR).
         keeper_secret_arn = f"arn:aws:secretsmanager:*:*:secret:keri/{alias}/*"
         fn.add_to_role_policy(iam.PolicyStatement(
             actions=["secretsmanager:GetSecretValue",
                      "secretsmanager:CreateSecret", "secretsmanager:PutSecretValue"],
             resources=[keeper_secret_arn]))
-        # NOTE: CreateSecret/PutSecretValue are needed only by the inception CR;
-        # a dedicated CR role would let the steady-state fn be GetSecretValue-only.
-        # Core (pooled) table: scoped to this service's namespace prefixes only.
-        #
-        # SECURITY-CRITICAL (VERIFIED): the multi-tenant boundary for the pooled
-        # core table rests on dynamodb:LeadingKeys scoping GSI queries
-        # (subdb-index) by the namespaced gsi_pk.  This was empirically verified
-        # against real AWS — the probe at keri_cdk/probes/leadingkeys/probe.py
-        # (see its README) created two tenant roles with the exact production
-        # policy, seeded both namespaces, then confirmed from tenant A's role:
-        #   - cross-tenant GSI Query (tenant B's gsi_pk)   → DENIED  ← the crux
-        #   - shared __meta__ GSI Query (another tenant)   → DENIED
-        #   - own GSI Query and base-table ops              → ALLOW (as expected)
-        # AWS does populate dynamodb:LeadingKeys for index queries; the boundary
-        # is sound.  moto/DynamoDB-Local do not enforce IAM conditions, so the
-        # probe must be re-run after any IAM policy change or major keripy key
-        # schema change (i.e. whenever gsi_pk shape changes).
-        #
-        # NOTE: DescribeTable has no item keys, so it is vacuously allowed under
-        # the LeadingKeys condition. It is required because DynamoDBer.open ->
-        # _ensure_table calls describe_table unconditionally on the core table
-        # (baser + reger); without it every cold start hits AccessDenied.
-        fn.add_to_role_policy(
-            iam.PolicyStatement(
-                actions=[
-                    "dynamodb:DescribeTable",
-                    "dynamodb:GetItem",
-                    "dynamodb:PutItem",
-                    "dynamodb:DeleteItem",
-                    "dynamodb:Query",
-                    "dynamodb:BatchWriteItem",
-                ],
-                resources=[
-                    core_table.table_arn,
-                    f"{core_table.table_arn}/index/*",
-                ],
-                conditions={
-                    "ForAllValues:StringLike": {
-                        "dynamodb:LeadingKeys": [
-                            "shared#*",
-                            "__meta__#shared#*",
-                            f"{alias}:*#*",
-                            f"__meta__#{alias}:*",
-                        ]
-                    }
-                },
-            )
-        )
 
-        # ── API Gateway: proxy all routes to the Lambda ──────────────────────────
-        # binary_media_types enables CESR (application/cesr) passthrough.
-        api = apigw.LambdaRestApi(
-            self,
-            "Api",
-            handler=fn,
-            proxy=True,
-            binary_media_types=["application/cesr", "*/*"],
-        )
+        # Pooled core table scoped to the four-pattern LeadingKeys union.
+        fn.add_to_role_policy(iam.PolicyStatement(
+            actions=["dynamodb:DescribeTable", "dynamodb:GetItem", "dynamodb:PutItem",
+                     "dynamodb:DeleteItem", "dynamodb:Query", "dynamodb:BatchWriteItem"],
+            resources=[core_table.table_arn, f"{core_table.table_arn}/index/*"],
+            conditions={"ForAllValues:StringLike": {"dynamodb:LeadingKeys": [
+                "shared#*", "__meta__#shared#*",
+                f"{alias}:*#*", f"__meta__#{alias}:*"]}}))
+
+        # API Gateway: CESR ingest proxy, returns 204.
+        api = apigw.LambdaRestApi(self, "Api", handler=fn, proxy=True,
+                                  binary_media_types=["application/cesr", "*/*"])
 
         self.api = api
         self.function = fn
 
-        # ── Inception Custom Resource ─────────────────────────────────────────────
-        # The service Lambda doubles as the CR on_event handler — handler.py
-        # routes events that carry a "RequestType" key to _inception.on_event.
-        # cr.Provider synthesises its own framework Lambda internally; test
-        # assertions must NOT count all Lambdas but match by FunctionName.
+        # Inception Custom Resource (fn doubles as on_event_handler).
         provider = cr.Provider(self, "InceptionProvider", on_event_handler=fn)
-        self.inception = CustomResource(
-            self,
-            "Inception",
-            service_token=provider.service_token,
-            properties={"Alias": alias},
-        )
+        self.inception = CustomResource(self, "Inception",
+                                        service_token=provider.service_token,
+                                        properties={"Alias": alias})
+
+    @property
+    def grant_principal(self):       # iam.IGrantable
+        """Delegate to the Function's role so adopters can grant their own
+        resources the canonical way: my_lookup_table.grant_read_data(svc)."""
+        return self.function.grant_principal
+
+
+def inject_handler_shim(asset_dir: str) -> None:
+    """Auto-inject the 1-line handler.py shim into a compute_code asset dir so the
+    deploy is robust whether or not Lambda resolves the layer-resident handler.
+    Callers (the example app) run this on the staged asset before Code.from_asset.
+    Idempotent (only writes if absent); harmless when the layer-resident handler
+    resolves."""
+    shim = os.path.join(asset_dir, "handler.py")
+    if not os.path.exists(shim):
+        with open(shim, "w") as f:
+            f.write("from keri_serviceaid.handler import handler  # noqa: F401\n")

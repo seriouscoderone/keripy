@@ -45,6 +45,10 @@ from botocore.exceptions import ClientError
 
 GSI_NAME = "subdb-index"
 SUBDB = "evts"                       # a representative store name
+# Task 7 (2026-06-17): reachability stores added to SHARED_KEL_STORES.  Seeded
+# here so the probe validates that shared#ends./locs./eans. are readable by any
+# tenant (oracle-complete) while still DENIED across private tenant namespaces.
+REACHABILITY_SUBDBS = ("ends", "locs", "eans")
 # Two tenants, mirroring Service AID aliases. Namespace = "{alias}:kel" (the
 # Service AID pools baser as "{alias}:kel"). Aliases chosen so neither is a
 # prefix of the other (tenanta / tenantb), so a StringLike "tenanta:*" pattern
@@ -103,6 +107,21 @@ def shared_meta_item() -> dict:
         "gsi_pk": {"S": "__meta__"},          # BARE constant — not namespaced
         "gsi_sk": {"S": f"{SHARED_NS}#{SUBDB}"},
         "val": {"S": "meta-of-shared"},
+    }
+
+
+# Task 7: reachability stores — same shape as shared_normal_item but for
+# ends./locs./eans. (without the trailing dot for the SUBDB column, matching
+# the DynamoDBer key convention where subdb names omit the trailing period in
+# the PK/gsi_pk field).
+def shared_reachability_item(subdb: str, key: str) -> dict:
+    """One shared# item for a reachability store (ends/locs/eans)."""
+    return {
+        "PK": {"S": f"{SHARED_NS}#{subdb}#{hexk(key)}"},
+        "SK": {"S": "."},
+        "gsi_pk": {"S": f"{SHARED_NS}#{subdb}"},
+        "gsi_sk": {"S": hexk(key)},
+        "val": {"S": f"pooled-{subdb}-record"},
     }
 
 
@@ -192,7 +211,12 @@ def seed(ddb, table):
     # tenant owns it). A read of these by tenant A proves cross-writer visibility.
     ddb.put_item(TableName=table, Item=shared_normal_item("event0"))
     ddb.put_item(TableName=table, Item=shared_meta_item())
-    print(f"  seeded {len(TENANTS)} tenants (normal + meta each) + the shared oracle namespace")
+    # Task 7: reachability stores (ends./locs./eans.) — seeded into shared# to
+    # prove that oracle-complete reads (endsFor) work across Habery boundaries.
+    for subdb in REACHABILITY_SUBDBS:
+        ddb.put_item(TableName=table, Item=shared_reachability_item(subdb, "record0"))
+    print(f"  seeded {len(TENANTS)} tenants (normal + meta each) + the shared oracle namespace"
+          f" (incl. reachability: {', '.join(REACHABILITY_SUBDBS)})")
 
 
 def create_role(iam, role_name, account, table_arn, alias):
@@ -316,6 +340,17 @@ def run_assertions(client_a, table):
          lambda: client_a.get_item(TableName=table, Key={
              "PK": {"S": f"__meta__#{SHARED_NS}#{SUBDB}"}, "SK": {"S": "__meta__"}}), ALLOW,
          "shared-store meta row is readable under __meta__#shared#*"),
+        # Task 7: reachability stores — oracle-complete (ends./locs./eans. pooled
+        # in shared#). Any tenant with shared#* MUST be able to read them.
+        ("shared: ends. base read (reachability, Task 7)  <<< ORACLE REACHABILITY",
+         lambda: q_base(f"{SHARED_NS}#ends#{hexk('record0')}"), ALLOW,
+         "end-role records are pooled oracle data — any tenant must read shared#ends."),
+        ("shared: locs. base read (reachability, Task 7)",
+         lambda: q_base(f"{SHARED_NS}#locs#{hexk('record0')}"), ALLOW,
+         "location records are pooled oracle data — any tenant must read shared#locs."),
+        ("shared: eans. base read (reachability, Task 7)",
+         lambda: q_base(f"{SHARED_NS}#eans#{hexk('record0')}"), ALLOW,
+         "endpoint-auth records are pooled oracle data — any tenant must read shared#eans."),
     ]
 
     rows, ok = [], True

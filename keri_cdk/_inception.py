@@ -23,17 +23,8 @@ import logging
 from keri.core.signing import Salter
 from keri.db.secretkeeper import SecretStore
 
-# Dual-mode: in tests/CDK synth this module is imported as ``keri_cdk._inception``
-# and the serviceaid runtime is a package (keri_cdk.handlers.serviceaid.*). On
-# Lambda the CR path ships this file flat in /var/task alongside the serviceaid
-# runtime modules (config.py, runtime.py, ...), so the package path is absent
-# and we fall back to the bare module names. See handler.py for the rationale.
-try:
-    from keri_cdk.handlers.serviceaid import runtime
-    from keri_cdk.handlers.serviceaid.config import Config
-except ImportError:  # pragma: no cover - flat /var/task on Lambda
-    import runtime
-    from config import Config
+from keri_serviceaid import runtime
+from keri_serviceaid.config import Config
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)

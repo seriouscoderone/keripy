@@ -52,3 +52,8 @@ def recipient_pre(issuer_hby):
     issuer_hby.kvy.processEscrows()
     assert pre in issuer_hby.kevers
     return pre
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers",
+                            "integration: requires a moto cold-start (deselected by default)")

@@ -1,9 +1,5 @@
-"""Environment-driven configuration for a Service AID Lambda.
-
-The keeper lives in one KMS-encrypted secret per stack (`keri/<alias>/keeper`)
-holding `{salt, bran, keeper-blob}`; salt/bran are read from that secret at
-runtime, so there is no separate bran secret or `-ks` keeper table.
-"""
+"""Environment-driven config for a Service-AID Lambda. The keeper lives in one
+KMS-encrypted Secrets Manager secret per stack (keri/<alias>/keeper)."""
 from __future__ import annotations
 
 import os
@@ -17,15 +13,9 @@ class Config:
     keeper_secret: str = ""
     witnesses: list[str] = field(default_factory=list)
     toad: int = 0
-    handler_module: str = ""
-    allowlist: list[str] = field(default_factory=list)
-    required_schema: str = ""
+    handler_ref: str = ""        # ASGI-style module:attr (e.g. "gated_handler:svc")
     region: str = "us-east-1"
     endpoint_url: str | None = None
-    # Separate endpoint for the keeper secret store (Secrets Manager). In
-    # production both endpoints are None (real AWS). This knob exists only so
-    # local dev can point DynamoDB at DynamoDB-Local (`endpoint_url`) while the
-    # keeper SecretStore still reaches real AWS / an in-process moto mock.
     secret_endpoint_url: str | None = None
 
     @property
@@ -42,17 +32,15 @@ class Config:
         wits = [w for w in os.environ.get("SERVICEAID_WITNESSES", "").split(",") if w]
         toad_env = os.environ.get("SERVICEAID_TOAD")
         toad = int(toad_env) if toad_env else len(wits)
-        # Keeper secret is convention-derived from the alias unless overridden.
-        keeper_secret = os.environ.get("SERVICEAID_KEEPER_SECRET") or f"keri/{alias}/keeper"
+        keeper_secret = (os.environ.get("SERVICEAID_KEEPER_SECRET")
+                         or f"keri/{alias}/keeper")
         return cls(
             alias=alias,
             core_table=os.environ["SERVICEAID_CORE_TABLE"],
             keeper_secret=keeper_secret,
             witnesses=wits,
             toad=toad,
-            handler_module=os.environ.get("SERVICEAID_HANDLER", ""),
-            allowlist=[a for a in os.environ.get("SERVICEAID_ALLOWLIST", "").split(",") if a],
-            required_schema=os.environ.get("SERVICEAID_REQUIRED_SCHEMA", ""),
+            handler_ref=os.environ.get("SERVICEAID_HANDLER", ""),
             region=os.environ.get("SERVICEAID_REGION", "us-east-1"),
             endpoint_url=os.environ.get("SERVICEAID_ENDPOINT_URL") or None,
             secret_endpoint_url=os.environ.get("SERVICEAID_SECRET_ENDPOINT_URL") or None,
