@@ -1,6 +1,7 @@
 """Tests for the pure selection/classification logic of teardown_sam."""
 import importlib.util
 import pathlib
+import pytest
 
 _PATH = pathlib.Path(__file__).resolve().parents[2] / "ecosystems" / "keri_host" / "teardown_sam.py"
 _spec = importlib.util.spec_from_file_location("teardown_sam", _PATH)
@@ -44,3 +45,21 @@ def test_format_plan_lists_every_selected_stack():
     text = teardown_sam.format_plan(sel)
     assert "serverless-witness" in text
     assert "serverless-x-CompanionStack" in text
+
+
+def test_delete_stack_raises_on_nonzero_returncode(monkeypatch):
+    """_delete_stack must raise RuntimeError (with stack name + stderr) when the
+    delete-stack call returns a non-zero exit code, not silently continue."""
+
+    class _FakeResult:
+        returncode = 1
+        stderr = "Stack [serverless-witness] does not exist"
+
+    monkeypatch.setattr(teardown_sam.subprocess, "run", lambda *a, **kw: _FakeResult())
+
+    with pytest.raises(RuntimeError) as exc_info:
+        teardown_sam._delete_stack("serverless-witness", "us-east-1")
+
+    msg = str(exc_info.value)
+    assert "serverless-witness" in msg
+    assert "does not exist" in msg

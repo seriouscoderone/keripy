@@ -59,24 +59,37 @@ def discover(region):
 
 def _disable_protections(stack, region):
     # Stack termination protection.
-    subprocess.run(["aws", "cloudformation", "update-termination-protection",
-                    "--stack-name", stack, "--no-enable-termination-protection",
-                    "--region", region], capture_output=True, text=True)
+    out = subprocess.run(["aws", "cloudformation", "update-termination-protection",
+                          "--stack-name", stack, "--no-enable-termination-protection",
+                          "--region", region], capture_output=True, text=True)
+    if out.returncode != 0:
+        print(f"WARNING: could not disable termination-protection for {stack}: {out.stderr.strip()}")
     # DynamoDB deletion protection for any tables in the stack.
     res = _aws(["cloudformation", "describe-stack-resources", "--stack-name", stack], region)
     for r in res.get("StackResources", []):
         if r["ResourceType"] == "AWS::DynamoDB::Table":
-            subprocess.run(["aws", "dynamodb", "update-table",
-                            "--table-name", r["PhysicalResourceId"],
-                            "--no-deletion-protection-enabled", "--region", region],
-                           capture_output=True, text=True)
+            out = subprocess.run(["aws", "dynamodb", "update-table",
+                                  "--table-name", r["PhysicalResourceId"],
+                                  "--no-deletion-protection-enabled", "--region", region],
+                                 capture_output=True, text=True)
+            if out.returncode != 0:
+                print(f"WARNING: could not disable deletion-protection for table "
+                      f"{r['PhysicalResourceId']} in {stack}: {out.stderr.strip()}")
 
 
 def _delete_stack(stack, region):
-    subprocess.run(["aws", "cloudformation", "delete-stack", "--stack-name", stack,
-                    "--region", region], capture_output=True, text=True)
-    subprocess.run(["aws", "cloudformation", "wait", "stack-delete-complete",
-                    "--stack-name", stack, "--region", region], capture_output=True, text=True)
+    out = subprocess.run(["aws", "cloudformation", "delete-stack", "--stack-name", stack,
+                          "--region", region], capture_output=True, text=True)
+    if out.returncode != 0:
+        raise RuntimeError(
+            f"delete-stack failed for {stack}: {out.stderr.strip()}"
+        )
+    out = subprocess.run(["aws", "cloudformation", "wait", "stack-delete-complete",
+                          "--stack-name", stack, "--region", region], capture_output=True, text=True)
+    if out.returncode != 0:
+        raise RuntimeError(
+            f"wait stack-delete-complete failed for {stack}: {out.stderr.strip()}"
+        )
 
 
 def execute(selected, region):
