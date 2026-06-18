@@ -909,23 +909,42 @@ class DynamoDBer:
 
     # ---- IoSet methods (Phase 2) ----
 
+    def _append_at_free_ion(self, db: DynamoSubDb, key: bytes, val: bytes,
+                            start_ion: int, *, sep: bytes = b".") -> int:
+        """Conditionally put val at the first free ordinal >= start_ion; return it.
+
+        Each attempt is a strongly-consistent conditional put (the PK must not
+        yet exist); on collision — a concurrent writer, or a stale GSI-read max
+        ion — advance to the next ordinal and retry, so a write is never silently
+        overwritten. Shared by putIoSetVals/addIoSetVal; mirrors appendOnVal.
+        """
+        ion = start_ion
+        for _ in range(_APPEND_MAX_RETRY):
+            iokey = suffix(key, ion, sep=sep)
+            if self._put_item(db, iokey, _SK_SINGLE, val, gsi_sk=_hex(iokey),
+                              condition="attribute_not_exists(PK)"):
+                return ion
+            ion += 1
+        raise ValueError(
+            f"Failed adding IoSet val at {key=} after {_APPEND_MAX_RETRY} attempts "
+            "(excessive contention).")
+
     def putIoSetVals(self, db: DynamoSubDb, key: bytes, vals,
                      *, sep: bytes = b".") -> bool:
         """Add each val in vals to insertion-ordered set at key.
-        Only adds vals not already in the set. Uses hidden ordinal suffix."""
+        Only adds vals not already in the set. Uses hidden ordinal suffix.
+
+        Lands each new val at the first free ordinal via conditional puts, so
+        concurrent writers to one (possibly shared/pooled) key — e.g. multiple
+        witnesses each appending their own receipt to a pooled wigs IoSet —
+        never overwrite each other.
+        """
         if not key or vals is None:
             return False
 
-        existing = list(self._get_ioset_items(db, key, sep=sep))
-        existing_vals = {v for _, v in existing}
-
-        max_ion = -1
-        for _, v in existing:
-            pass  # We need the ion values
-        # Re-query to get ions
+        existing_vals = {v for _, v in self._get_ioset_items(db, key, sep=sep)}
         existing_with_ions = list(self._get_ioset_raw(db, key, sep=sep))
-        if existing_with_ions:
-            max_ion = max(ion for ion, _ in existing_with_ions)
+        max_ion = max((ion for ion, _ in existing_with_ions), default=-1)
 
         added = False
         for val in vals:
@@ -933,9 +952,7 @@ class DynamoDBer:
                 val = bytes(val)
             if val in existing_vals:
                 continue
-            max_ion += 1
-            iokey = suffix(key, max_ion, sep=sep)
-            self._put_item(db, iokey, _SK_SINGLE, val, gsi_sk=_hex(iokey))
+            max_ion = self._append_at_free_ion(db, key, val, max_ion + 1, sep=sep)
             existing_vals.add(val)
             added = True
 
@@ -974,23 +991,12 @@ class DynamoDBer:
             if v == val:
                 return False
 
-        # Find max ion
+        # Find max ion, then land at the first free ion via conditional puts —
+        # no silent overwrite under concurrent writers / GSI lag.
         existing_raw = list(self._get_ioset_raw(db, key, sep=sep))
         max_ion = max((ion for ion, _ in existing_raw), default=-1)
-
-        # Land at the first free ion via strongly-consistent conditional puts, advancing
-        # locally on collision — no silent overwrite under concurrent writers / GSI lag.
-        # (Cross-writer dedup stays best-effort; perfect dedup would need a transaction.)
-        ion = max_ion + 1
-        for _ in range(_APPEND_MAX_RETRY):
-            iokey = suffix(key, ion, sep=sep)
-            if self._put_item(db, iokey, _SK_SINGLE, val, gsi_sk=_hex(iokey),
-                              condition="attribute_not_exists(PK)"):
-                return True
-            ion += 1
-        raise ValueError(
-            f"Failed adding IoSet val at {key=} after {_APPEND_MAX_RETRY} attempts "
-            "(excessive contention).")
+        self._append_at_free_ion(db, key, val, max_ion + 1, sep=sep)
+        return True
 
     def getIoSetItemIter(self, db: DynamoSubDb, key: bytes,
                          *, ion: int = 0,

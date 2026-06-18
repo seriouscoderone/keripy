@@ -449,6 +449,26 @@ class TestIoSetOps:
         assert b"second" in vals    # landed at next free ion
         assert len(vals) == 2
 
+    def test_putIoSetVals_does_not_overwrite_on_stale_max(self, dber):
+        """Multiple writers .put their own val to ONE (pooled) key under GSI lag —
+        e.g. 5 witnesses each appending their receipt to a shared wigs IoSet. Each
+        put must land at a free ion, never overwrite a prior writer's value.
+        (Pre-fix: putIoSetVals' unconditional put at the stale max ion silently
+        overwrote it — the live federation lost 4 of 5 witness receipts this way.)"""
+        sdb = dber.env.open_db(b"test.")
+        assert dber.putIoSetVals(sdb, b"k", [b"wig-A"]) is True   # writer A at ion=0
+        # Simulate a second writer (witness B) whose dedup + max-ion GSI reads lag,
+        # reporting the set as empty -> it computes ion=0 (already taken by A).
+        dber._get_ioset_raw = lambda *a, **k: []
+        dber._get_ioset_items = lambda *a, **k: []
+        assert dber.putIoSetVals(sdb, b"k", [b"wig-B"]) is True   # must advance, not overwrite
+        del dber._get_ioset_raw
+        del dber._get_ioset_items
+        vals = [v for _, v in dber.getIoSetItemIter(sdb, b"k")]
+        assert b"wig-A" in vals     # NOT overwritten
+        assert b"wig-B" in vals     # landed at next free ion
+        assert len(vals) == 2
+
     def test_getIoSetLastItem(self, dber):
         sdb = dber.env.open_db(b"test.")
         dber.putIoSetVals(sdb, b"key1", [b"a", b"b", b"c"])
