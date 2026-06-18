@@ -44,3 +44,38 @@ def _validate(entries):
         if e["slug"] in seen:
             raise ValueError(f"duplicate slug: {e['slug']!r}")
         seen.add(e["slug"])
+
+
+# Imported here (after load_federation) to avoid a circular import at package load
+# time: keri_cdk/__init__.py does NOT import federation, so this is safe.
+from keri_cdk import KeriCoreStack, WitnessStack, MailboxStack  # noqa: E402
+
+
+def build_federation(app, entries, env, *, core_table_name="keri-core", lwa_layer_arn=None):
+    """Instantiate KeriCoreStack + one witness+mailbox pair per entry.
+
+    Stack IDs are domain-derived (Witness{slug} / Mailbox{slug}) so each node's
+    namespace (<stack>:kel / :mbx) and keeper secret (keri/<stack>/keeper) stay
+    stable per domain regardless of config ordering.
+
+    Returns a dict with keys: "core", "witnesses" (slug->WitnessStack),
+    "mailboxes" (slug->MailboxStack).
+    """
+    core = KeriCoreStack(app, "KeriHostCore", table_name=core_table_name, env=env)
+    witnesses, mailboxes = {}, {}
+    for e in entries:
+        slug, domain, zone = e["slug"], e["domain"], e["hosted_zone_id"]
+        low = slug.lower()
+        wdom, mdom = f"witness.{domain}", f"mailbox.{domain}"
+        witnesses[slug] = WitnessStack(
+            app, f"Witness{slug}",
+            name=f"witness-{low}", alias=f"witness-{low}",
+            domain_name=wdom, hosted_zone_id=zone,
+            witness_url=f"https://{wdom}", core_table=core.table, env=env)
+        mailboxes[slug] = MailboxStack(
+            app, f"Mailbox{slug}",
+            name=f"mailbox-{low}", alias=f"mailbox-{low}",
+            domain_name=mdom, hosted_zone_id=zone,
+            mailbox_url=f"https://{mdom}", core_table=core.table,
+            lwa_layer_arn=lwa_layer_arn, env=env)
+    return {"core": core, "witnesses": witnesses, "mailboxes": mailboxes}
