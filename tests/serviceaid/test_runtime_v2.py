@@ -67,8 +67,14 @@ def test_incept_or_load_uses_receiptor_not_witnessreceiptor():
 
 def test_cross_habery_oracle_read_kever_visible():
     """Two DynamoDBers sharing the `shared` namespace on one moto table: AID-A's
-    KEL (parsed through service-A's db) is visible to service-B from the pooled
-    shared namespace."""
+    key-state (parsed through service-A's db) is visible to service-B from the
+    pooled shared namespace.
+
+    The oracle pools the KEL digest index + key-state (kels./stts./ksns.), NOT
+    the per-witness event/receipt write-logs (evts./sigs./wigs./... stay node-
+    private so keripy's Receiptor converges receipts across the witness pool).
+    So cross-service visibility is asserted via the shared KEL index (kels.),
+    which a consumer reads to learn a peer's current key state."""
     with mock_aws():
         # Ensure the table is created via the first DynamoDBer open.
         def _open(ns):
@@ -93,18 +99,12 @@ def test_cross_habery_oracle_read_kever_visible():
 
         # service-B opens its OWN private ns but the SAME shared oracle table.
         dbB = _open("svcb:kel")
-        # The producer's KEL events live in the shared `evts.` store, readable from
-        # B's view of the pooled oracle. getTopItemIter yields (key_tuple, serder)
-        # where key_tuple is the decoded key parts (e.g. ('EAbc...',) for a prefix
-        # key). Assert the inception event is present by checking the key strings.
-        found = False
-        for key_tuple, _val in dbB.evts.getTopItemIter():
-            # key_tuple is a tuple of str parts; join them to get the raw key string
-            key_str = "".join(str(p) for p in key_tuple)
-            if pre in key_str:
-                found = True
-                break
-        assert found, (
-            f"producer KEL not visible to service-B via the shared oracle namespace "
-            f"(prefix={pre!r})")
+        # The producer's key-STATE (KeyStateRecord) lives in the shared `stts.`
+        # store — Kever pins it on each processed event — readable from B's view
+        # of the pooled oracle. This is what an oracle consumer reads to learn a
+        # peer's current keys (the verifiable key state, not the full event log).
+        ksr = dbB.states.get(keys=(pre,))
+        assert ksr is not None and ksr.i == pre, (
+            f"producer key-state not visible to service-B via the shared oracle "
+            f"namespace (prefix={pre!r})")
         dbA.close(); dbB.close()

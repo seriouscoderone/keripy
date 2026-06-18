@@ -177,3 +177,7 @@ ecosystems/*/cdk.out/
 
 # Auto-generated deploy shim injected by inject_handler_shim() (generated artifact)
 examples/gated_retrieval/handler.py
+
+# keri.host federation: real zone IDs + harvested AIDs are private, never committed
+ecosystems/keri_host/federation.json
+ecosystems/keri_host/federation_aids.json

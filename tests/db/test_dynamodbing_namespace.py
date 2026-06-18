@@ -197,19 +197,27 @@ def test_shared_kel_stores_is_public_subset_of_baser():
     # since none of those are in BASER_STORES.
     assert set(SHARED_KEL_STORES) <= baser, "shared set must be a subset of BASER_STORES"
     # (2) Must NOT share the node-PRIVATE Baser stores: escrows, hab registry,
-    # KRAM/challenge, OOBI queues, reply/endpoint config.
+    # KRAM/challenge, OOBI queues, raw reply queue. (ends./locs. — the derived
+    # endpoint/location AUTHORIZATION records — ARE intentionally shared for
+    # reachability; rpys., the raw reply store, stays private.)
     node_private = {"habs.", "names.", "hbys.", "pses.", "pwes.", "ooes.", "udes.",
-                    "ldes.", "ures.", "vres.", "exns.", "oobis.", "rpys.", "ends.",
-                    "locs.", "ctyp.", "msgc."}
+                    "ldes.", "ures.", "vres.", "exns.", "oobis.", "rpys.", "ctyp.", "msgc."}
     assert set(SHARED_KEL_STORES).isdisjoint(node_private), "shared set leaks a node-private store"
+    # (3) Must NOT pool the per-witness KEL/receipt WRITE-logs: each witness owns
+    # these, and keripy's Receiptor disseminates receipts across the pool to reach
+    # toad. Pooling wigs. collapsed all witnesses' receipts to one (2026-06-18
+    # cutover). Sharing only the idempotent key-state keeps the oracle correct.
+    witness_write_logs = {"evts.", "sigs.", "wigs.", "rcts.", "vrcs.", "fels.",
+                          "fons.", "dtss.", "wits.", "aess."}
+    assert set(SHARED_KEL_STORES).isdisjoint(witness_write_logs), \
+        "must not pool per-witness write-logs — breaks Receiptor toad convergence"
     # Belt-and-suspenders: SHARED_KEL_STORES must be disjoint from the runtime
     # NEVER_SHARE_STORES guard (single source of truth for confidential stores).
     from keri.db.dynamodbing import NEVER_SHARE_STORES
     assert set(SHARED_KEL_STORES).isdisjoint(NEVER_SHARE_STORES), \
         "credential-body / TEL store must never be shared"
-    # the verifiable key-event/receipt/key-state core IS shared
-    assert {"kels.", "evts.", "fels.", "sigs.", "wigs.", "rcts.", "stts.", "ksns."} \
-        <= set(SHARED_KEL_STORES)
+    # the self-verifying key-STATE core IS shared (key-state, not the event log)
+    assert {"kels.", "stts.", "ksns."} <= set(SHARED_KEL_STORES)
 
 
 @needs_moto
