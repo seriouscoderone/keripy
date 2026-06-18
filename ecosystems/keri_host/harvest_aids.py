@@ -16,17 +16,24 @@ _HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parents[1]))
 from keri_cdk.federation import load_federation  # noqa: E402
 
-# Endpoint that returns the node's controller OOBI/key-state JSON. Adjust the
-# path here if the deployed witness/mailbox exposes its self-OOBI elsewhere
-# (confirm against keri_cdk/handlers/*/<...>_handler.py routes at run time).
-_OOBI_PATH = "/oobi"
+# The witness/mailbox controller root returns clean JSON identifying the node:
+#   {"witness"|"mailbox": "<AID>", "alias": ..., "sn": 0, "kevers": N}
+# (The /oobi endpoint returns CESR — JSON + a -V... attachment — not parseable
+# JSON, so we read the role-keyed root instead. Confirmed against the deployed
+# witness_handler/mailbox_handler routes 2026-06-18.)
+_SELF_PATH = "/"
 
 
 def extract_aid(oobi_json, role):
-    """Return the controller AID from an OOBI/controller JSON payload."""
-    aid = oobi_json.get("i") or oobi_json.get("aid") or oobi_json.get("pre")
+    """Return the node's controller AID from its self-identifying JSON payload.
+
+    The witness/mailbox root keys the AID by role ("witness"/"mailbox"); the
+    i/aid/pre fallbacks cover a raw key-event / OOBI payload.
+    """
+    aid = (oobi_json.get(role) or oobi_json.get("i")
+           or oobi_json.get("aid") or oobi_json.get("pre"))
     if not aid:
-        raise ValueError(f"no AID field in {role} OOBI payload: {oobi_json!r}")
+        raise ValueError(f"no AID field in {role} payload: {oobi_json!r}")
     return aid
 
 
@@ -41,7 +48,7 @@ def harvest(entries, fetch=_http_fetch):
         slug, domain = e["slug"], e["domain"]
         for role, key in (("witness", "witnesses"), ("mailbox", "mailboxes")):
             base = f"https://{role}.{domain}"
-            payload = fetch(base + _OOBI_PATH)
+            payload = fetch(base + _SELF_PATH)
             out[key][slug] = {"aid": extract_aid(payload, role), "url": base}
     return out
 
