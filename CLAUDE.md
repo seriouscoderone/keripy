@@ -58,8 +58,8 @@ and §6 of the field guide).
 
 - **Consistency:** point reads by exact key are strongly consistent; GSI-served ordered/IoSet/range
   reads are **eventually consistent** (DynamoDB forbids `ConsistentRead` on a GSI). No false-accept
-  risk (toad uses in-memory wigers), but expect transient stale reads. Details:
-  `reference_dynamodb_consistency_profile` (auto-memory).
+  risk (toad uses in-memory wigers), but expect transient stale reads; synchronous responders that
+  gate on a GSI read can return a transient false-404.
 - **IoSet/ordered appends** (`appendOnVal`, `addIoSetVal`, `putIoSetVals`) land at the first free
   ordinal via **conditional puts with retry** (`_append_at_free_ion`) — never revert to an
   unconditional put at a GSI-read max (it loses writes under concurrent writers / GSI lag).
