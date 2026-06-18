@@ -12,7 +12,6 @@ Run AFTER harvest_aids.py (needs federation_aids.json):
 import json
 import pathlib
 import subprocess
-import sys
 import tempfile
 
 _HERE = pathlib.Path(__file__).resolve().parent
