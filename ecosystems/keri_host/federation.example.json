@@ -1,0 +1,7 @@
+[
+  { "slug": "Alpha",   "domain": "alpha.example.com",   "hosted_zone_id": "Z00000000000000000001" },
+  { "slug": "Bravo",   "domain": "bravo.example.com",   "hosted_zone_id": "Z00000000000000000002" },
+  { "slug": "Charlie", "domain": "charlie.example.com", "hosted_zone_id": "Z00000000000000000003" },
+  { "slug": "Delta",   "domain": "delta.example.com",   "hosted_zone_id": "Z00000000000000000004" },
+  { "slug": "Echo",    "domain": "echo.example.com",    "hosted_zone_id": "Z00000000000000000005" }
+]
