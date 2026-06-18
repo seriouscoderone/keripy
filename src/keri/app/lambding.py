@@ -62,8 +62,19 @@ BASER_STORES = [
 # registry, ALL escrows, KRAM/challenge, OOBI queues, and the entire Reger.
 # See docs/superpowers/specs/2026-06-15-cdk-kel-oracle-design.md.
 SHARED_KEL_STORES = frozenset({
-    "evts.", "fels.", "kels.", "dtss.", "sigs.", "wigs.", "rcts.", "vrcs.",
-    "aess.", "fons.", "wits.", "stts.", "ksns.", "knas.",
+    # KEY-STATE only — the current, self-verifying key state a consumer reads to
+    # authenticate a peer: the KEL digest index plus the Kever state record and
+    # signed key-state notices. Every witness derives the SAME value for a given
+    # AID, so pooling these is idempotent — never a lost write.
+    "kels.", "stts.", "ksns.", "knas.",
+    # The per-witness KEL/receipt WRITE-logs are deliberately NOT pooled —
+    # evts. sigs. wigs. rcts. vrcs. fels. fons. dtss. wits. aess. Each witness owns
+    # these in its own namespace; keripy's agenting.Receiptor gathers each
+    # witness's own receipt and disseminates it to the others to reach toad
+    # (src/keri/app/agenting.py Receiptor.receipt). Pooling wigs. across the pool
+    # collapsed all witnesses' receipts to ONE (a witness saw a peer's wig already
+    # present and did not contribute its own), so clients could never collect
+    # toad-of-N. See the 2026-06-18 SAM->CDK cutover validation.
     # Reachability (end-role / location / endpoint-auth): pooling these makes the
     # oracle REACHABILITY-COMPLETE so a Service-AID resolves an in-domain peer's
     # mailbox/controller endpoint from one local endsFor read (path-(c)). These
