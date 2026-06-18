@@ -1,7 +1,18 @@
 # Shared-KEL Key-State Oracle (DynamoDBer per-store namespace routing) — Design
 
+> ⚠️ **AMENDED 2026-06-18 (SAM→CDK cutover).** This design pooled the full KEL — including the
+> per-witness receipt/event **write-logs** (`evts. sigs. wigs. rcts. vrcs. fels. fons. dtss. wits.
+> aess.`) — into the shared namespace. That broke witness-receipt toad convergence: keripy's
+> `agenting.Receiptor` needs each witness to OWN its `wigs.`, but pooling made the N witnesses one
+> writer (last-writer-wins) and only one receipt survived, so clients could not reach toad 3-of-5
+> (proven live: `shared#evts=5` but `shared#wigs=1`). `SHARED_KEL_STORES` was **narrowed to key-STATE
+> + reachability only** (`kels. stts. ksns. knas. ends. locs. eans.`); the write-logs stay
+> per-witness. The oracle's contract is now "read a peer's current **key-state**", not "replay a
+> peer's full KEL." See `docs/superpowers/specs/2026-06-18-sam-to-cdk-federation-cutover-design.md`
+> and commit `327fecdd`.
+
 **Date:** 2026-06-15
-**Status:** Approved (brainstorm complete; ready for implementation plan)
+**Status:** Approved (brainstorm) — IMPLEMENTED, then AMENDED 2026-06-18 (see banner above)
 **Repo:** keripy fork. Build runs as a **fresh subagent-driven session** in a worktree off `development`.
 **Predecessor:** CDK Phase C (`e2dfe9ad`) shipped per-service isolation and explicitly deferred this oracle.
 
