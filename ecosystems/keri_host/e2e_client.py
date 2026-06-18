@@ -10,8 +10,11 @@ Run AFTER harvest_aids.py (needs federation_aids.json):
     AWS_PROFILE=personal python e2e_client.py
 """
 import json
+import os
 import pathlib
+import re
 import subprocess
+import sys
 import tempfile
 
 _HERE = pathlib.Path(__file__).resolve().parent
@@ -34,9 +37,12 @@ def witness_oobis(aids):
 
 
 def _kli(args, ks_home):
-    cmd = ["kli", *args, "--base", ks_home]
-    print("  $", " ".join(cmd))
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    # kli --base must be relative (appended under ~/.keri); isolate instead by
+    # pointing HOME at the throwaway tempdir so ~/.keri lands inside it.
+    cmd = ["kli", *args]
+    print("  $ HOME=<tmp>", " ".join(cmd))
+    r = subprocess.run(cmd, capture_output=True, text=True,
+                       env={**os.environ, "HOME": ks_home})
     if r.returncode != 0:
         raise RuntimeError(f"kli {' '.join(args)} failed:\n{r.stdout}\n{r.stderr}")
     return r.stdout
@@ -56,7 +62,24 @@ def run_e2e(aids, toad=3):
                     "--file", str(cfg_path), "--receipt-endpoint"], ks_home)
         status = _kli(["status", "--name", _NAME, "--alias", "e2e", "--verbose"], ks_home)
         # Assert the KEL shows at least `toad` witness receipts.
-        if status.count("witness") < toad:  # coarse check; refine to count receipt seals
-            raise RuntimeError(f"fewer than {toad} witness receipts in:\n{status}")
-        print(f"  e2e incept OK at toad {toad}-of-{len(cfg['wits'])}")
+        print("---- kli status ----")
+        print(status)
+        # Parse the actual witness-receipt count from `kli status --verbose`
+        # ("Receipts:\t<n>"), not a substring heuristic.
+        m = re.search(r"Receipts:\s*(\d+)", status)
+        receipts = int(m.group(1)) if m else 0
+        if receipts < toad:
+            raise RuntimeError(f"only {receipts} witness receipts (< toad {toad}) in:\n{status}")
+        print(f"  e2e incept OK: {receipts} receipts collected at toad "
+              f"{toad}-of-{len(cfg['wits'])}")
         return out
+
+
+def main():
+    aids = json.loads(_AIDS_FILE.read_text())
+    run_e2e(aids)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
