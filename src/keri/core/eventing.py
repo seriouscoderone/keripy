@@ -4210,18 +4210,23 @@ class Kevery:
                 # raises exception if problem
                 # otherwise adds to KEL
                 # create kever from serder
-                kever = Kever(serder=serder,
-                              sigers=sigers,
-                              wigers=wigers,
-                              db=self.db,
-                              delsner=delsner,
-                              delsger=delsger,
-                              firner=firner if self.cloned else None,
-                              dater=dater if self.cloned else None,
-                              cues=self.cues,
-                              eager=eager,
-                              local=local,
-                              check=self.check)
+                try:
+                    kever = Kever(serder=serder,
+                                  sigers=sigers,
+                                  wigers=wigers,
+                                  db=self.db,
+                                  delsner=delsner,
+                                  delsger=delsger,
+                                  firner=firner if self.cloned else None,
+                                  dater=dater if self.cloned else None,
+                                  cues=self.cues,
+                                  eager=eager,
+                                  local=local,
+                                  check=self.check)
+                except LikelyDuplicitousError:
+                    # Concurrent different-said inception lost the sn=0 gate race.
+                    self.escrowLDEvent(serder=serder, sigers=sigers)
+                    raise
                 self.kevers[pre] = kever  # not exception so add to kevers
 
                 # At this point  the inceptive event (icp or dip) given by serder
@@ -4308,11 +4313,19 @@ class Kevery:
                     # verify signatures etc and update state if valid
                     # raise exception if problem.
                     # Otherwise adds to KELs
-                    kever.update(serder=serder, sigers=sigers, wigers=wigers,
-                                 delsner=delsner, delsger=delsger,
-                                 firner=firner if self.cloned else None,
-                                 dater=dater if self.cloned else None,
-                                 eager=eager, local=local, check=self.check)
+                    try:
+                        kever.update(serder=serder, sigers=sigers, wigers=wigers,
+                                     delsner=delsner, delsger=delsger,
+                                     firner=firner if self.cloned else None,
+                                     dater=dater if self.cloned else None,
+                                     eager=eager, local=local, check=self.check)
+                    except LikelyDuplicitousError:
+                        # The first-seen gate lost the (pre,sn) race to a different-
+                        # said event (concurrent Lambda instances). Mirror the in-order
+                        # duplicity branch: escrow to ldes and re-raise so callers treat
+                        # it as detected duplicity. (No-op for LMDB; gate never raises there.)
+                        self.escrowLDEvent(serder=serder, sigers=sigers)
+                        raise
 
                     # At this point the non-inceptive event (rot, drt, or ixn)
                     # given by serder together with its attachments has been
@@ -5662,7 +5675,7 @@ class Kevery:
         self.db.dtss.put(keys=dgkey, val=Dater())
         self.db.sigs.put(keys=dgkey, vals=sigers)
         self.db.evts.put(keys=(serder.preb, serder.saidb), val=serder)
-        self.db.addLde(snKey(serder.preb, serder.sn), serder.saidb)
+        self.db.ldes.add(keys=serder.preb, on=serder.sn, val=serder.saidb)
         # log duplicitous
         logger.debug("Kevery process: escrowed likely duplicitous event=\n%s\n", serder.pretty())
 
@@ -7230,7 +7243,8 @@ class Kevery:
         This allows FIFO processing of events with same prefix and sn but different
         digest.
 
-        Uses  .db.addLde(self, key, val) which is IOVal with dups.
+        Uses  self.db.ldes.add(keys, on, val) (OnIoDupSuber) to write the escrow
+        index entry.
 
         Value is dgkey for event stored in .Evt where .Evt has serder.raw of event.
 
@@ -7239,7 +7253,7 @@ class Kevery:
             self.db.dtss.put(keys=dgkey, val=Dater())
             self.db.sigs.put(keys=dgkey, vals=sigers)
             self.db.evts.put(keys=(pre, serder.dig), val=serder)
-            self.db.addLde(snKey(pre, sn), serder.digb)
+            self.db.ldes.add(keys=pre, on=sn, val=serder.digb)
             where:
                 serder is SerderKERI instance of  event
                 sigers is list of Siger instance for  event

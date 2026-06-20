@@ -134,6 +134,11 @@ def test_concurrent_different_said_is_duplicity(dynamo_hby):
         db2.close()
 
     assert _marker(dynamo_hby.db, hab.pre.encode(), 1) == serderA.saidb
+    # The loser is escrowed as evidence in ldes (mirrors detected duplicity).
+    escrowed = [edig.encode() if isinstance(edig, str) else bytes(edig)
+                for (_pre,), sn, edig in
+                dynamo_hby.db.ldes.getAllItemIter(keys=hab.pre.encode()) if sn == 1]
+    assert serderB.saidb in escrowed
 
 
 def test_same_said_redelivery_idempotent(dynamo_hby):
@@ -149,7 +154,6 @@ def test_same_said_redelivery_idempotent(dynamo_hby):
 
         kvy = eventing.Kevery(db=dynamo_hby.db, lax=False, local=True)
         _process(kvy, serderA, sigersA)
-        fn1 = hab.kever.fner.num
 
         # Re-deliver the identical event through the second instance: it reaches
         # logEvent, the gate's putVal loses to A's marker, but the incumbent said
@@ -158,7 +162,10 @@ def test_same_said_redelivery_idempotent(dynamo_hby):
     finally:
         db2.close()
 
-    assert hab.kever.fner.num == fn1
+    # The slot still holds the original said and no second first-seen was logged.
+    assert _marker(dynamo_hby.db, hab.pre.encode(), 1) == serderA.saidb
+    fels = list(dynamo_hby.db.fels.getAllItemIter(keys=hab.pre.encode()))
+    assert len(fels) == 2  # icp (fn=0) + the single ixn (fn=1); no dup
 
 
 def test_recovery_supersedes_marker(dynamo_hby):
@@ -206,3 +213,16 @@ def test_recovery_supersedes_marker(dynamo_hby):
     assert kever.sner.num == 1
     assert kever.serder.said == rot.said
     assert _marker(db, pre.encode(), 1) == rot.saidb
+
+
+def test_escrowLDEvent_writes_to_ldes(dynamo_hby):
+    """escrowLDEvent must land the event in the ldes store (regression for the
+    pre-existing addLde partial-migration bug)."""
+    hab = dynamo_hby.makeHab(name="ctrl", icount=1, ncount=1, transferable=True)
+    serderB, sigersB = _make_ixn(hab, sn=1, data=[{"d": "B"}])
+    kvy = eventing.Kevery(db=dynamo_hby.db, lax=False, local=True)
+    kvy.escrowLDEvent(serder=serderB, sigers=sigersB)
+    escrowed = [edig.encode() if isinstance(edig, str) else bytes(edig)
+                for (_pre,), _sn, edig in
+                dynamo_hby.db.ldes.getAllItemIter(keys=hab.pre.encode())]
+    assert serderB.saidb in escrowed
