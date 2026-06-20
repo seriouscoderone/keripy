@@ -50,6 +50,14 @@ def dber():
         db.close(clear=True)
 
 
+def test_single_writer_defaults_true_for_other_backends():
+    """Backends that don't set the flag are treated as single-writer (the
+    safe default for LMDB), so getattr returns True and the gate is skipped."""
+    class FakeLmdb:
+        pass
+    assert getattr(FakeLmdb(), "singleWriter", True) is True
+
+
 @needs_moto
 @needs_dynamodbing
 class TestDynamoDBerLifecycle:
@@ -112,13 +120,6 @@ class TestDynamoDBerLifecycle:
         """DynamoDB has many concurrent writers, so the KERI layer must enforce
         first-seen itself. The generic flag advertises this."""
         assert dber.singleWriter is False
-
-    def test_single_writer_defaults_true_for_other_backends(self):
-        """Backends that don't set the flag are treated as single-writer (the
-        safe default for LMDB), so getattr returns True and the gate is skipped."""
-        class FakeLmdb:
-            pass
-        assert getattr(FakeLmdb(), "singleWriter", True) is True
 
 
 @needs_moto
