@@ -3486,6 +3486,15 @@ class Kever:
 
 
 
+    # First-seen admits EXACTLY ONE event version per (pre, sn): a same-said
+    # re-delivery is idempotent, a different-said event is duplicity and is
+    # rejected forever ("first seen, always seen, never unseen") -- it is NEVER
+    # retried into another slot. This is the OPPOSITE of the db.fels/db.wigs
+    # IoSet appends (appendOnVal/_append_at_free_ion), where N distinct valid
+    # values each advance to the next free ordinal and are ALL stored. `sn` is
+    # controller-signed and SAID-bound, not assigned here; the claim only
+    # arbitrates who first occupies that fixed slot. Conflating the two forks the
+    # KEL. Full rationale + spec cites: docs/first-seen-vs-append.md.
     def _claimFirstSeen(self, serder):
         """KERI first-seen claim for a backend that does NOT serialize concurrent
         writers (self.db.singleWriter is False). Atomic via the storage layer's
