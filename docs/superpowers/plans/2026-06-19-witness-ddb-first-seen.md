@@ -340,34 +340,82 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ---
 
-## Task 3: `Kevery.processEvent` escrow wrappers for the gate's duplicity raise
+## Task 3: Fix `escrowLDEvent` (pre-existing bug) + `Kevery.processEvent` escrow wrappers
+
+**Why this task grew (read first):** the gate's different-`said` loser must land in keripy's `ldes` escrow, exactly like keripy's pre-existing detected-duplicity branches. But Task 2 surfaced — and the controller confirmed by runtime introspection — that **`escrowLDEvent` is broken in this fork:** it calls `self.db.addLde(...)`, a method that **does not exist on `Baser` (LMDB) or `DynamoDBer`** (no `def addLde` anywhere in `src/keri/`, no `__getattr__`, not on a live instance). `db.ldes` is now a modern `OnIoDupSuber`; `escrowLDEvent`'s *read/rem* side already uses it (`self.db.ldes.getAllItemIter`/`.rem` at `:7260`/`:7330`/`:7339`) but the **add side was left on the removed `addLde`** — a partial-migration bug, latent because no test exercises `escrowLDEvent`. **Both** pre-existing duplicity branches (`self.escrowLDEvent(...)` at the icp-duplicate and in-order paths) hit it too. Per the user decision (2026-06-20), **fix it properly** (migrate the add-side to `db.ldes.add`), then the gate wrapper and the pre-existing branches all share a working `escrowLDEvent`.
 
 **Files:**
-- Modify: `src/keri/core/eventing.py` — `Kevery.processEvent` acceptance branch (`:4267`) and the fresh-inception `Kever(...)` construction
+- Modify: `src/keri/core/eventing.py` — `escrowLDEvent` add-side; `unescrowLDEvents` add-side; `Kevery.processEvent` acceptance branch + the fresh-inception `Kever(...)` construction
 - Test: `tests/core/test_eventing_firstseen_dynamo.py`
 
 **Interfaces:**
-- Consumes: `self.escrowLDEvent(serder=..., sigers=...)` (`:5595`), `LikelyDuplicitousError`.
-- Produces (behavior): a `LikelyDuplicitousError` raised by the gate inside `update()`/inception is escrowed to `ldes` and re-raised — byte-for-byte the existing duplicity branches (`4238-4243`, `4323-4328`). No-op for LMDB (gate never raises there).
+- Consumes: `self.db.ldes.add(keys, on=0, val=...)` — the modern `OnIoDupSuber.add` (`subing.py:2810`); authoritative existing call pattern is `self.db.ldes.rem(keys=pre, on=sn, val=...)` (`eventing.py:7330`). `LikelyDuplicitousError` (already imported).
+- Produces (behavior): `escrowLDEvent` actually writes to `ldes` on both backends; a `LikelyDuplicitousError` raised by the gate inside `update()`/inception is escrowed to `ldes` and re-raised — matching keripy's existing duplicity branches. No-op for LMDB (gate never raises there; but the `escrowLDEvent` fix also repairs LMDB's pre-existing duplicity escrow).
 
-- [ ] **Step 1: Add the `ldes` assertion to the duplicity test**
+- [ ] **Step 0: Confirm the exact call sites (they drifted after Task 2)**
 
-Extend `test_concurrent_different_said_is_duplicity` in `tests/core/test_eventing_firstseen_dynamo.py` after the `pytest.raises` block:
+Run: `grep -n "addLde\|self.db.ldes\.\|def escrowLDEvent\|def unescrowLDEvents\|self.escrowLDEvent\|kever = Kever(\|pre not in self.kevers" src/keri/core/eventing.py`
+You should see: two `self.db.addLde(...)` add-side calls (in `escrowLDEvent` and `unescrowLDEvents`), the modern `self.db.ldes.getAllItemIter`/`.rem` reads, two `self.escrowLDEvent(...)` pre-existing duplicity call sites, and the fresh-inception `kever = Kever(...)` site. Use the line numbers you find — do not trust stale numbers in this plan.
+
+- [ ] **Step 1: Write the failing tests (the escrow fix + the gate escrow assertion)**
+
+(1) Add a direct escrow-fix test to `tests/core/test_eventing_firstseen_dynamo.py` that proves `escrowLDEvent` writes to `ldes` (this is what RED-confirms the `addLde` bug — it currently raises `AttributeError`):
+```python
+def test_escrowLDEvent_writes_to_ldes(dynamo_hby):
+    """escrowLDEvent must land the event in the ldes store (regression for the
+    pre-existing addLde partial-migration bug)."""
+    hab = dynamo_hby.makeHab(name="ctrl", icount=1, ncount=1, transferable=True)
+    serderB, sigersB = _make_ixn(hab, sn=1, data=[{"d": "B"}])
+    kvy = eventing.Kevery(db=dynamo_hby.db, lax=False, local=True)
+    kvy.escrowLDEvent(serder=serderB, sigers=sigersB)
+    escrowed = [bytes(edig) for (_pre,), _sn, edig in
+                dynamo_hby.db.ldes.getAllItemIter(keys=hab.pre.encode())]
+    assert serderB.saidb in escrowed
+```
+(2) Extend `test_concurrent_different_said_is_duplicity` after the `pytest.raises` block so the gate's loser is escrowed:
 ```python
     # The loser is escrowed as evidence in ldes (mirrors detected duplicity).
-    escrowed = list(dynamo_hby.db.ldes.getOnIter(keys=hab.pre.encode(), on=1))
-    assert serderB.saidb in [bytes(v) for v in escrowed]
+    escrowed = [bytes(edig) for (_pre,), sn, edig in
+                dynamo_hby.db.ldes.getAllItemIter(keys=hab.pre.encode()) if sn == 1]
+    assert serderB.saidb in escrowed
 ```
-> Confirm the exact `ldes` accessor by how `escrowLDEvent` writes it (`grep -n "ldes\|addLde" src/keri/core/eventing.py src/keri/db/basing.py`); use the same accessor as the existing duplicity test. Contract: `serderB` is present in `ldes` at `(pre, sn=1)`.
+(3) Strengthen `test_same_said_redelivery_idempotent` (Task 2 review Minor — its `fner` assertion was on the wrong handle and held trivially). Replace its assertion with marker-and-fels checks that are load-bearing regardless of handle:
+```python
+    # The slot still holds the original said and no second first-seen was logged.
+    assert _marker(dynamo_hby.db, hab.pre.encode(), 1) == serderA.saidb
+    fels = list(dynamo_hby.db.fels.getIter(keys=hab.pre.encode()))
+    assert len([f for f in fels]) == 2  # icp (fn=0) + the single ixn (fn=1); no dup
+```
+> If `fels.getIter` is not the right accessor, use the one the existing tests use to enumerate the first-seen log (grep `fels` in `tests/core/test_eventing_v1.py`/`v2.py`); the contract is "exactly one first-seen entry for the ixn at sn=1, marker unchanged."
 
-- [ ] **Step 2: Run to verify the assertion fails**
+- [ ] **Step 2: Run to verify they fail**
 
-Run: `pytest tests/core/test_eventing_firstseen_dynamo.py::test_concurrent_different_said_is_duplicity -v`
-Expected: FAIL on the `ldes` assertion (the gate raised, but nothing escrowed it yet).
+Run: `pytest tests/core/test_eventing_firstseen_dynamo.py -v`
+Expected: `test_escrowLDEvent_writes_to_ldes` FAILS with `AttributeError: 'DynamoDBer' object has no attribute 'addLde'` (the pre-existing bug). The duplicity test fails on its new `ldes` assertion. (The same-said test may already pass on its strengthened marker assertion — that's fine.)
 
-- [ ] **Step 3: Wrap the acceptance-branch `update()` call**
+- [ ] **Step 3: Fix the `escrowLDEvent` / `unescrowLDEvents` add-side (the partial-migration bug)**
 
-In `Kevery.processEvent`, the in-order/recovery acceptance branch (`:4258-4271`) calls `kever.update(...)`. Wrap it:
+In `escrowLDEvent`, replace the add-side call:
+```python
+        self.db.addLde(snKey(serder.preb, serder.sn), serder.saidb)
+```
+with the modern Suber API (matching the existing `.rem(keys=pre, on=sn, val=...)` pattern):
+```python
+        self.db.ldes.add(keys=serder.preb, on=serder.sn, val=serder.saidb)
+```
+In `unescrowLDEvents`, replace:
+```python
+            self.db.addLde(snKey(pre, sn), serder.digb)
+```
+with:
+```python
+            self.db.ldes.add(keys=pre, on=sn, val=serder.digb)
+```
+Also update the stale docstring line in `unescrowLDEvents` that reads `Uses .db.addLde(self, key, val) which is IOVal with dups.` to reference `self.db.ldes.add(keys, on, val)`. Do not change any other line; the read/rem side already uses the modern API.
+
+- [ ] **Step 4: Wrap the acceptance-branch `update()` call**
+
+In `Kevery.processEvent`, the in-order/recovery acceptance branch calls `kever.update(...)`. Wrap that exact call (use the argument list you see in the file verbatim):
 ```python
                     try:
                         kever.update(serder=serder, sigers=sigers, wigers=wigers,
@@ -378,15 +426,15 @@ In `Kevery.processEvent`, the in-order/recovery acceptance branch (`:4258-4271`)
                     except LikelyDuplicitousError:
                         # The first-seen gate lost the (pre,sn) race to a different-
                         # said event (concurrent Lambda instances). Mirror the in-order
-                        # duplicity branch below: escrow to ldes and re-raise so callers
-                        # treat it as detected duplicity. (No-op for LMDB.)
+                        # duplicity branch: escrow to ldes and re-raise so callers treat
+                        # it as detected duplicity. (No-op for LMDB; gate never raises there.)
                         self.escrowLDEvent(serder=serder, sigers=sigers)
                         raise
 ```
 
-- [ ] **Step 4: Wrap the fresh-inception `Kever(...)` construction**
+- [ ] **Step 5: Wrap the fresh-inception `Kever(...)` construction**
 
-In `Kevery.processEvent`, locate the *new* inception branch (`pre not in self.kevers`) that constructs `Kever(...)` (just before the `else: # already accepted inception` at `:4211`). Wrap that `kever = Kever(...)` call (keep its existing arguments verbatim):
+Locate the *new* inception branch (`pre not in self.kevers`) that constructs `kever = Kever(...)`. Wrap that call (keep its existing arguments verbatim — only add the `try/except`):
 ```python
                 try:
                     kever = Kever(serder=serder, sigers=sigers, wigers=wigers,
@@ -396,27 +444,30 @@ In `Kevery.processEvent`, locate the *new* inception branch (`pre not in self.ke
                     self.escrowLDEvent(serder=serder, sigers=sigers)
                     raise
 ```
-> Confirm the exact construction site with `grep -n "kever = Kever(\|self.kevers\[" src/keri/core/eventing.py`. Only add the surrounding `try/except`.
 
-- [ ] **Step 5: Run the duplicity test**
+- [ ] **Step 6: Run the gate/escrow tests**
 
 Run: `pytest tests/core/test_eventing_firstseen_dynamo.py -v`
-Expected: PASS, including the `ldes` assertion.
+Expected: all PASS (escrow-fix test, duplicity-with-ldes, win, same-said-strengthened, recovery), moto active not skipped.
 
-- [ ] **Step 6: Full eventing regression (LMDB unchanged)**
+- [ ] **Step 7: Full eventing regression (LMDB unchanged + escrow fix doesn't regress)**
 
-Run: `pytest tests/core/test_eventing.py -q`
-Expected: PASS.
+Run: `pytest tests/core/test_eventing_v1.py tests/core/test_eventing_v2.py tests/core/test_kevery.py -q`
+Expected: PASS. (The `addLde→ldes.add` fix can only repair a path that previously would have crashed; no passing test hit `addLde`, so none regress. The gate is a no-op on LMDB.)
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add src/keri/core/eventing.py tests/core/test_eventing_firstseen_dynamo.py
-git commit -m "feat(eventing): escrow the first-seen gate's duplicity raise to ldes
+git commit -m "fix(eventing): repair escrowLDEvent + escrow the gate's duplicity raise to ldes
 
-Wrap the processEvent acceptance update() and fresh-inception Kever() so a
-LikelyDuplicitousError from the gate lands in ldes and re-raises, mirroring
-keripy's existing detected-duplicity branches. No-op for LMDB.
+escrowLDEvent/unescrowLDEvents called a removed db.addLde (partial migration bug,
+latent — no test exercised it); migrate the add-side to the modern
+db.ldes.add(keys,on,val), matching the read/rem side already on it. Then wrap the
+processEvent acceptance update() and fresh-inception Kever() so the first-seen
+gate's LikelyDuplicitousError lands in ldes and re-raises, like keripy's existing
+duplicity branches (now also repaired). No-op for LMDB. Strengthen the same-said
+idempotency test (marker + fels) per Task 2 review.
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
