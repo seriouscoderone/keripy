@@ -3,7 +3,7 @@
 Translates ``sam-witness/template.yaml`` into CDK constructs:
   - Shared DynamoDB core table (passed in as ``core_table``; LeadingKeys-scoped namespace)
   - KeriRuntimeLayer      (arm64 libsodium + keripy native deps)
-  - Lambda Function       (python3.14, arm64, reserved_concurrent_executions=1)
+  - Lambda Function       (python3.14, arm64, scales horizontally via KERI-layer first-seen gate)
   - Scoped Secrets Manager IAM policy
   - REST API (LambdaRestApi) with explicit routes + REGIONAL endpoint
   - ACM Certificate       (DNS validation, synth-safe via from_hosted_zone_attributes)
@@ -78,7 +78,10 @@ class WitnessStack(Stack):
         # --- Lambda function ----------------------------------------------------
         # python3.14 + arm64: keripy pins python_requires>=3.14.0
         # LD_LIBRARY_PATH=/opt/lib: libsodium is at /opt/lib in the KeriRuntimeLayer
-        # reserved_concurrent_executions=1: single-writer guarantee per witness
+        # No reserved_concurrent_executions: the KERI-layer per-(pre,sn) conditional
+        # first-seen gate (Kever._claimFirstSeen over the DynamoDBer's conditional putVal)
+        # is the single-writer serialization point, so the witness runs many concurrent
+        # instances. See docs/superpowers/specs/2026-06-19-witness-ddb-first-seen-concurrency-design.md.
         self.fn = _lambda.Function(
             self,
             "WitnessFunction",
@@ -91,7 +94,6 @@ class WitnessStack(Stack):
             handler="witness_handler.handler",
             code=_lambda.Code.from_asset(_HANDLER_DIR),
             layers=[layer],
-            reserved_concurrent_executions=1,
             timeout=Duration.seconds(timeout_seconds),
             memory_size=memory,
             environment={

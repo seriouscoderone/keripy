@@ -15,11 +15,10 @@ def _synth():
     return Template.from_stack(s)
 
 
-def test_witness_zip_arm64_reserved_concurrency_layer():
+def test_witness_zip_arm64_layer():
     t = _synth()
     t.has_resource_properties("AWS::Lambda::Function", {
         "Architectures": ["arm64"],
-        "ReservedConcurrentExecutions": 1,
         "Handler": "witness_handler.handler",
         "Runtime": "python3.14",
         "Layers": Match.any_value(),
@@ -71,3 +70,13 @@ def test_witness_iam_grants_shared_and_private_leadingkeys():
     # witness out of its own namespace). STACK_NAME renders as Fn::Join, so its
     # literal ":*#*" suffix is the marker (absent from both shared patterns).
     assert ":*#*" in body, "witness must keep its per-service LeadingKeys grant"
+
+
+def test_witness_function_has_no_reserved_concurrency():
+    """The witness drops reserved_concurrency=1 — the KERI-layer first-seen gate
+    is the per-identifier serialization point, so the witness scales horizontally."""
+    t = _synth()
+    t.has_resource_properties("AWS::Lambda::Function", Match.object_like({
+        "Handler": "witness_handler.handler",
+        "ReservedConcurrentExecutions": Match.absent(),
+    }))
