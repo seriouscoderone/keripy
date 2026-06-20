@@ -240,3 +240,12 @@ def test_shared_kel_oracle_cross_service_read_and_private_isolation():
         a.setVal(a_habs, b"AownHab", b"secret")               # A writes PRIVATE store
         assert b.getVal(b_habs, b"AownHab") is None            # invisible to B
         a.close(); b.close()
+
+
+def test_fseen_store_registered_and_not_shared():
+    """The first-seen marker store is a configured per-service store, and must
+    NEVER be pooled into the shared key-state oracle (each witness owns its own
+    first-seen, like its wigs)."""
+    from keri.app.lambding import BASER_STORES, SHARED_KEL_STORES
+    assert "fseen." in BASER_STORES
+    assert "fseen." not in SHARED_KEL_STORES

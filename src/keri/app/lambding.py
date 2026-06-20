@@ -49,6 +49,9 @@ BASER_STORES = [
     "hbys.",   "cons.",   "ccigs.",  "imgs.",   "ifld.",
     "sids.",   "icigs.",  "iimgs.", "dpwe.",   "dune.",
     "dpub.",   "cdel.",   "meids.",  "maids.",
+    "fseen.",  # per-(pre,sn) first-seen marker store used by the KERI-layer
+               # first-seen gate (Kever) on concurrent backends. PER-WITNESS:
+               # never add to SHARED_KEL_STORES.
     # KRAM stores
     "ctyp.",   "msgc.",   "tmsc.",   "pmkm.",   "pmks.",
     "pmsk.",   "trqs.",   "tsgs.",   "sscs.",   "ssts.",

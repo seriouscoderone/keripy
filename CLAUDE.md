@@ -71,6 +71,14 @@ and §6 of the field guide).
 - **Keeper:** one KMS-encrypted Secrets Manager secret per stack (`keri/<stack>/keeper`) holds the
   salt; the AID re-incepts deterministically from it. Force-deleting the secret → a fresh salt → a new
   AID.
+- **First-seen gate (witness concurrency):** the witness enforces KERI first-seen via a per-(pre,sn)
+  conditional claim composed in the KERI layer (`Kever._claimFirstSeen`/`_supersedeFirstSeen` over the
+  generic `DynamoDBer.putVal`/`getVal`/`setVal`, store `fseen.`), NOT a Lambda
+  `reserved_concurrent_executions=1` cap (removed). The storage layer carries NO KERI vocabulary —
+  only a generic `singleWriter` flag (`DynamoDBer=False`, default `True`). The gate is skipped on the
+  single-writer LMDB Baser (byte-identical to upstream). `fseen.` is PER-WITNESS (`BASER_STORES`,
+  never `SHARED_KEL_STORES`). Spec:
+  `docs/superpowers/specs/2026-06-19-witness-ddb-first-seen-concurrency-design.md`.
 
 ## Design docs
 

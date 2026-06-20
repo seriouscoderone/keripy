@@ -2374,11 +2374,16 @@ class Kever:
 
             # .valSigWigsDel above ensures thresholds met otherwise raises exception
             # all validated above so may add to KEL and FEL logs as first seen
+            # Superseding recovery if this rot/drt sits at or before the current
+            # accepted sn (matches rotate()'s recovery branch sner.num <= self.sner.num).
+            # self.sner is still the prior state here (updated below).
+            is_supersede = sner.num <= self.sner.num
             fn, dts = self.logEvent(serder=serder, sigers=sigers, wigers=wigers,
                                     wits=wits,
                                     first=True if not check else False,
                                     delnum=delsner, diger=delsger,
-                                    firner=firner, dater=dater, local=local)
+                                    firner=firner, dater=dater, local=local,
+                                    supersede=is_supersede)
 
             # nxt and signatures verify so update state
             self.sner = sner  # sequence number Number instance
@@ -3481,8 +3486,28 @@ class Kever:
 
 
 
+    def _claimFirstSeen(self, serder):
+        """KERI first-seen claim for a backend that does NOT serialize concurrent
+        writers (self.db.singleWriter is False). Atomic via the storage layer's
+        generic conditional insert (putVal); on a lost claim, read the incumbent
+        said with the generic strong getVal. Returns (won, existing_said).
+        """
+        fsdb = self.db.env.open_db(b"fseen.")
+        key = snKey(serder.preb, serder.sn)
+        if self.db.putVal(fsdb, key, serder.saidb):
+            return True, None
+        return False, self.db.getVal(fsdb, key)
+
+    def _supersedeFirstSeen(self, serder):
+        """Replace the first-seen marker for a Kevery-validated superseding
+        recovery (overwrite via the generic setVal).
+        """
+        fsdb = self.db.env.open_db(b"fseen.")
+        self.db.setVal(fsdb, snKey(serder.preb, serder.sn), serder.saidb)
+
     def logEvent(self, serder, sigers=None, wigers=None, wits=None, first=False,
-                 delnum=None, diger=None, firner=None, dater=None, local=True):
+                 delnum=None, diger=None, firner=None, dater=None, local=True,
+                 supersede=False):
         """
         Update associated logs for verified event.
         Update is idempotent. Logs will not write dup at key if already exists.
@@ -3548,6 +3573,25 @@ class Kever:
             self.db.esrs.put(keys=dgkeys, val=esr)
 
         pre = self.prefixer.qb64
+        if first and not getattr(self.db, "singleWriter", True):
+            # The store does not serialize concurrent writers (the serverless
+            # DynamoDB backend across many witness Lambda instances), so enforce
+            # KERI first-seen here. LMDB is single-writer by construction
+            # (singleWriter absent -> default True) and skips this entirely:
+            # byte-identical to upstream. Closes the TOCTOU that the eventually-
+            # consistent db.kels.getLast duplicity check (Kevery) can miss under
+            # GSI lag when concurrent Lambdas race the slot.
+            if supersede:  # Kevery-validated superseding recovery (Rules A/B/C)
+                self._supersedeFirstSeen(serder)
+            else:
+                won, existing = self._claimFirstSeen(serder)
+                if not won:
+                    if existing == serder.saidb:
+                        first = False  # same event won the slot: idempotent, skip fn
+                    else:
+                        raise LikelyDuplicitousError(
+                            f"Likely Duplicitous Event sn={serder.sn} "
+                            f"type={serder.ilk} SAID={serder.said}")
         if first:  # append event dig to first seen database in order
             fn = self.db.fels.append(keys=serder.preb, val=serder.saidb)
             if firner and fn != firner.sn:  # cloned replay but replay fn not match
@@ -4166,18 +4210,23 @@ class Kevery:
                 # raises exception if problem
                 # otherwise adds to KEL
                 # create kever from serder
-                kever = Kever(serder=serder,
-                              sigers=sigers,
-                              wigers=wigers,
-                              db=self.db,
-                              delsner=delsner,
-                              delsger=delsger,
-                              firner=firner if self.cloned else None,
-                              dater=dater if self.cloned else None,
-                              cues=self.cues,
-                              eager=eager,
-                              local=local,
-                              check=self.check)
+                try:
+                    kever = Kever(serder=serder,
+                                  sigers=sigers,
+                                  wigers=wigers,
+                                  db=self.db,
+                                  delsner=delsner,
+                                  delsger=delsger,
+                                  firner=firner if self.cloned else None,
+                                  dater=dater if self.cloned else None,
+                                  cues=self.cues,
+                                  eager=eager,
+                                  local=local,
+                                  check=self.check)
+                except LikelyDuplicitousError:
+                    # Concurrent different-said inception lost the sn=0 gate race.
+                    self.escrowLDEvent(serder=serder, sigers=sigers)
+                    raise
                 self.kevers[pre] = kever  # not exception so add to kevers
 
                 # At this point  the inceptive event (icp or dip) given by serder
@@ -4264,11 +4313,19 @@ class Kevery:
                     # verify signatures etc and update state if valid
                     # raise exception if problem.
                     # Otherwise adds to KELs
-                    kever.update(serder=serder, sigers=sigers, wigers=wigers,
-                                 delsner=delsner, delsger=delsger,
-                                 firner=firner if self.cloned else None,
-                                 dater=dater if self.cloned else None,
-                                 eager=eager, local=local, check=self.check)
+                    try:
+                        kever.update(serder=serder, sigers=sigers, wigers=wigers,
+                                     delsner=delsner, delsger=delsger,
+                                     firner=firner if self.cloned else None,
+                                     dater=dater if self.cloned else None,
+                                     eager=eager, local=local, check=self.check)
+                    except LikelyDuplicitousError:
+                        # The first-seen gate lost the (pre,sn) race to a different-
+                        # said event (concurrent Lambda instances). Mirror the in-order
+                        # duplicity branch: escrow to ldes and re-raise so callers treat
+                        # it as detected duplicity. (No-op for LMDB; gate never raises there.)
+                        self.escrowLDEvent(serder=serder, sigers=sigers)
+                        raise
 
                     # At this point the non-inceptive event (rot, drt, or ixn)
                     # given by serder together with its attachments has been
@@ -5618,7 +5675,7 @@ class Kevery:
         self.db.dtss.put(keys=dgkey, val=Dater())
         self.db.sigs.put(keys=dgkey, vals=sigers)
         self.db.evts.put(keys=(serder.preb, serder.saidb), val=serder)
-        self.db.addLde(snKey(serder.preb, serder.sn), serder.saidb)
+        self.db.ldes.add(keys=serder.preb, on=serder.sn, val=serder.saidb)
         # log duplicitous
         logger.debug("Kevery process: escrowed likely duplicitous event=\n%s\n", serder.pretty())
 
@@ -7186,7 +7243,8 @@ class Kevery:
         This allows FIFO processing of events with same prefix and sn but different
         digest.
 
-        Uses  .db.addLde(self, key, val) which is IOVal with dups.
+        Uses  self.db.ldes.add(keys, on, val) (OnIoDupSuber) to write the escrow
+        index entry.
 
         Value is dgkey for event stored in .Evt where .Evt has serder.raw of event.
 
@@ -7195,7 +7253,7 @@ class Kevery:
             self.db.dtss.put(keys=dgkey, val=Dater())
             self.db.sigs.put(keys=dgkey, vals=sigers)
             self.db.evts.put(keys=(pre, serder.dig), val=serder)
-            self.db.addLde(snKey(pre, sn), serder.digb)
+            self.db.ldes.add(keys=pre, on=sn, val=serder.digb)
             where:
                 serder is SerderKERI instance of  event
                 sigers is list of Siger instance for  event

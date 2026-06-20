@@ -203,6 +203,12 @@ class DynamoDBer:
     All reads use ConsistentRead=True. All writes are immediate (no flush).
     """
 
+    # Generic concurrency-model flag: DynamoDB allows many concurrent writers to
+    # one key, so a caller needing single-writer semantics (KERI first-seen) must
+    # enforce them itself. (LMDB-backed stores are single-writer and omit this,
+    # defaulting True via getattr.) NOT a KERI concept — a storage property.
+    singleWriter = False
+
     def __init__(self, *, name: str, stores: dict[str, DynamoSubDb],
                  table_name: str, client, table, namespace: str | None = None,
                  shared_namespace: str | None = None,

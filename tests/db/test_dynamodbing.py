@@ -32,7 +32,7 @@ except ImportError:
 needs_moto = pytest.mark.skipif(not HAS_MOTO, reason="requires moto")
 needs_dynamodbing = pytest.mark.skipif(not HAS_DYNAMODBING, reason="requires dynamodbing + boto3")
 
-STORES = ["evts.", "fels.", "kels.", "sigs.", "test."]
+STORES = ["evts.", "fels.", "kels.", "sigs.", "test.", "fseen."]
 
 
 @pytest.fixture
@@ -48,6 +48,14 @@ def dber():
         )
         yield db
         db.close(clear=True)
+
+
+def test_single_writer_defaults_true_for_other_backends():
+    """Backends that don't set the flag are treated as single-writer (the
+    safe default for LMDB), so getattr returns True and the gate is skipped."""
+    class FakeLmdb:
+        pass
+    assert getattr(FakeLmdb(), "singleWriter", True) is True
 
 
 @needs_moto
@@ -107,6 +115,11 @@ class TestDynamoDBerLifecycle:
 
     def test_flush_noop(self, dber):
         assert dber.flush() == 0
+
+    def test_dynamodber_is_not_single_writer(self, dber):
+        """DynamoDB has many concurrent writers, so the KERI layer must enforce
+        first-seen itself. The generic flag advertises this."""
+        assert dber.singleWriter is False
 
 
 @needs_moto
