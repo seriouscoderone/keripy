@@ -114,3 +114,26 @@ def test_mailbox_doer_built_with_exchanger_and_verifier(issuer_hby):
     assert isinstance(doer, MailboxDirector)
     assert "/credential" in doer.topics
     assert doer.exchanger is issuer_hby.exc
+
+
+class RaisingResolver:
+    def resolve(self, sender, hby):
+        raise LookupError("no endpoint")
+
+
+def test_process_captured_suppresses_per_exn_errors(issuer_hby, quote_schema, recipient_pre):
+    hab = issuer_hby.makeHab(name="rating-engine")
+    rgy = credentialing.Regery(hby=issuer_hby, name="rating-engine", temp=True)
+    svc = ServiceAid(alias="rating-engine")
+
+    @svc.command(route="/rate", issues=quote_schema)
+    def rate(req):
+        return Reply.acdc(recipient=req.sender, attributes={"i": req.sender, "score": 1})
+
+    svc.resolver = RaisingResolver()
+    rt = LocalRuntime(svc, hby=issuer_hby, hab=hab, rgy=rgy)
+
+    exn, _ = exchanging.exchange(route="/rate", sender=recipient_pre,
+                                 receiver=hab.pre, attributes={})
+    rt._captures["/rate"].handle(exn, attachments=[])
+    rt.process_captured()   # must NOT raise despite the resolver LookupError
