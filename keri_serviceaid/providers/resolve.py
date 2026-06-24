@@ -65,3 +65,23 @@ class OracleResolver:
         raise LookupError(
             f"no reachable endpoint for {sender} via the oracle "
             "(in-stream/OOBI first-contact resolution is a named fallback seam)")
+
+
+class BoundResolver:
+    """Resolver bound to one explicit hab — for the local (in-wallet) runtime,
+    whose Habery holds many AIDs (so OracleResolver's single-hab assumption does
+    not hold). Reads the bound hab's endsFor and picks the highest-priority role,
+    https preferred."""
+
+    def __init__(self, hab):
+        self.hab = hab
+
+    def resolve(self, sender: str, hby) -> Endpoint:
+        ends = self.hab.endsFor(sender)            # role -> eid -> scheme -> url
+        for role in _ROLE_PRIORITY:
+            if role in ends and ends[role]:
+                eid, locs = next(iter(ends[role].items()))
+                url = locs.get("https") or locs.get("http") or next(iter(locs.values()), "")
+                if url:
+                    return Endpoint(role=role, eid=eid, url=url)
+        raise LookupError(f"no reachable endpoint for {sender} via bound hab")

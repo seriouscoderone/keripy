@@ -10,7 +10,7 @@ from .contract import ServiceAid, Request, Reply, Command, TestRuntime, Credenti
 from .providers import (
     Authorizer, Allowlist,
     Verifier, OracleVerifier, VerificationError, KeyState,
-    Resolver, OracleResolver, Endpoint,
+    Resolver, OracleResolver, BoundResolver, Endpoint,
     Issuer, IpexGrantIssuer, Context,
     Deliverer, PostmanDeliverer,
     IdempotencyStore, DynamoLedger, LMDBLedger,
@@ -20,7 +20,7 @@ __all__ = [
     "ServiceAid", "Request", "Reply", "Command", "TestRuntime", "CredentialReq",
     "Authorizer", "Allowlist",
     "Verifier", "OracleVerifier", "VerificationError", "KeyState",
-    "Resolver", "OracleResolver", "Endpoint",
+    "Resolver", "OracleResolver", "BoundResolver", "Endpoint",
     "Issuer", "IpexGrantIssuer", "Context",
     "Deliverer", "PostmanDeliverer",
     "IdempotencyStore", "DynamoLedger", "LMDBLedger",

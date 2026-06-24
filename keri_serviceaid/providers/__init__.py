@@ -6,7 +6,7 @@ never changes. See the framework design spec.
 """
 from .authz import Authorizer, Allowlist
 from .verify import Verifier, OracleVerifier, VerificationError, KeyState
-from .resolve import Resolver, OracleResolver, Endpoint
+from .resolve import Resolver, OracleResolver, BoundResolver, Endpoint
 from .issue import Issuer, IpexGrantIssuer, Context
 from .deliver import Deliverer, PostmanDeliverer
 from .idempotency import IdempotencyStore, DynamoLedger, LMDBLedger
@@ -14,7 +14,7 @@ from .idempotency import IdempotencyStore, DynamoLedger, LMDBLedger
 __all__ = [
     "Authorizer", "Allowlist",
     "Verifier", "OracleVerifier", "VerificationError", "KeyState",
-    "Resolver", "OracleResolver", "Endpoint",
+    "Resolver", "OracleResolver", "BoundResolver", "Endpoint",
     "Issuer", "IpexGrantIssuer", "Context",
     "Deliverer", "PostmanDeliverer",
     "IdempotencyStore", "DynamoLedger", "LMDBLedger",

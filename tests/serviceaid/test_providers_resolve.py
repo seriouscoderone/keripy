@@ -51,3 +51,32 @@ def test_witness_fallback_when_only_role():
 def test_no_endpoint_raises():
     with pytest.raises(LookupError, match="no reachable endpoint"):
         _resolver().resolve("EReq", FakeHby(FakeHab({})))
+
+
+# ---------------------------------------------------------------------------
+# BoundResolver
+# ---------------------------------------------------------------------------
+from keri_serviceaid import BoundResolver, Endpoint as _Endpoint
+
+
+class FakeBoundHab:
+    """Minimal hab stub exposing endsFor(pre) -> {role: {eid: {scheme: url}}}."""
+    def __init__(self, ends):
+        self._ends = ends
+
+    def endsFor(self, pre):
+        return self._ends
+
+
+def test_bound_resolver_picks_highest_priority_role_https():
+    hab = FakeBoundHab({
+        "witness": {"Ewit": {"http": "http://wit/"}},
+        "mailbox": {"Embx": {"https": "https://mbx/", "http": "http://mbx/"}},
+    })
+    ep = BoundResolver(hab).resolve("Esender", hby=None)
+    assert ep == _Endpoint(role="mailbox", eid="Embx", url="https://mbx/")
+
+
+def test_bound_resolver_raises_when_no_endpoint():
+    with pytest.raises(LookupError):
+        BoundResolver(FakeBoundHab({})).resolve("Esender", hby=None)
