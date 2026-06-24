@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from keri.db import subing
+from keri.db import dbing, subing
 
 PROC_STORE = "proc."
 
@@ -42,3 +42,33 @@ class DynamoLedger:
 
     def record(self, said: str, grant: bytes) -> None:
         self.proc.pin(keys=(said,), val=bytes(grant))
+
+
+class LMDBLedger:
+    """Idempotency store for the local runtime, on a dedicated keripy LMDBer.
+
+    The idempotency ledger (inbound exn SAID -> signed grant) is a keri_serviceaid
+    pipeline concept (cloud sibling: DynamoLedger), not a keripy primitive. It
+    cannot live in the wallet's main Baser (hby.db): that LMDB env already uses all
+    MaxNamedDBs=100 named sub-DBs (DbsFullError). So LMDBLedger opens its OWN sibling
+    LMDBer (name '<db.name>-proc', alongside the wallet's db) and stores the ledger
+    there via the same Suber that DynamoLedger uses.
+    """
+
+    def __init__(self, db):
+        self._led = dbing.LMDBer(name=f"{db.name}-proc", base=db.base,
+                                 headDirPath=db.headDirPath, temp=db.temp,
+                                 reopen=True)
+        self.proc = subing.Suber(db=self._led, subkey=PROC_STORE)
+
+    def seen(self, said: str) -> bytes | None:
+        raw = self.proc.get(keys=(said,))
+        if raw is None:
+            return None
+        return raw.encode("utf-8") if isinstance(raw, str) else bytes(raw)
+
+    def record(self, said: str, grant: bytes) -> None:
+        self.proc.pin(keys=(said,), val=bytes(grant))
+
+    def close(self) -> None:
+        self._led.close()

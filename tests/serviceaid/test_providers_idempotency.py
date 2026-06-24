@@ -35,3 +35,24 @@ def test_record_overwrites(db):
     led.record("EReqSaid", b"first")
     led.record("EReqSaid", b"second")
     assert led.seen("EReqSaid") == b"second"
+
+
+from keri_serviceaid import LMDBLedger
+
+
+def test_lmdb_unseen_returns_none(issuer_hby):
+    assert LMDBLedger(issuer_hby.db).seen("ENeverSeen") is None
+
+
+def test_lmdb_record_then_seen_roundtrips_grant_bytes(issuer_hby):
+    led = LMDBLedger(issuer_hby.db)
+    grant = b'{"v":"KERI10JSON","t":"exn"}-attachments'
+    led.record("EReqSaid", grant)
+    assert led.seen("EReqSaid") == grant
+
+
+def test_lmdb_record_overwrites(issuer_hby):
+    led = LMDBLedger(issuer_hby.db)
+    led.record("EReqSaid", b"first")
+    led.record("EReqSaid", b"second")
+    assert led.seen("EReqSaid") == b"second"

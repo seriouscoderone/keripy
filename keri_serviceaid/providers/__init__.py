@@ -9,7 +9,7 @@ from .verify import Verifier, OracleVerifier, VerificationError, KeyState
 from .resolve import Resolver, OracleResolver, Endpoint
 from .issue import Issuer, IpexGrantIssuer, Context
 from .deliver import Deliverer, PostmanDeliverer
-from .idempotency import IdempotencyStore, DynamoLedger
+from .idempotency import IdempotencyStore, DynamoLedger, LMDBLedger
 
 __all__ = [
     "Authorizer", "Allowlist",
@@ -17,5 +17,5 @@ __all__ = [
     "Resolver", "OracleResolver", "Endpoint",
     "Issuer", "IpexGrantIssuer", "Context",
     "Deliverer", "PostmanDeliverer",
-    "IdempotencyStore", "DynamoLedger",
+    "IdempotencyStore", "DynamoLedger", "LMDBLedger",
 ]

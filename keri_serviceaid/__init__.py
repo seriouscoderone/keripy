@@ -13,7 +13,7 @@ from .providers import (
     Resolver, OracleResolver, Endpoint,
     Issuer, IpexGrantIssuer, Context,
     Deliverer, PostmanDeliverer,
-    IdempotencyStore, DynamoLedger,
+    IdempotencyStore, DynamoLedger, LMDBLedger,
 )
 
 __all__ = [
@@ -23,5 +23,5 @@ __all__ = [
     "Resolver", "OracleResolver", "Endpoint",
     "Issuer", "IpexGrantIssuer", "Context",
     "Deliverer", "PostmanDeliverer",
-    "IdempotencyStore", "DynamoLedger",
+    "IdempotencyStore", "DynamoLedger", "LMDBLedger",
 ]
