@@ -9,6 +9,7 @@ from here. No keripy import at top level so this stays cheap to import.
 from .contract import ServiceAid, Request, Reply, Command, TestRuntime, CredentialReq
 from .providers import (
     Authorizer, Allowlist,
+    CredentialGate,
     Verifier, OracleVerifier, VerificationError, KeyState,
     Resolver, OracleResolver, BoundResolver, Endpoint,
     Issuer, IpexGrantIssuer, Context,
@@ -19,6 +20,7 @@ from .providers import (
 __all__ = [
     "ServiceAid", "Request", "Reply", "Command", "TestRuntime", "CredentialReq",
     "Authorizer", "Allowlist",
+    "CredentialGate",
     "Verifier", "OracleVerifier", "VerificationError", "KeyState",
     "Resolver", "OracleResolver", "BoundResolver", "Endpoint",
     "Issuer", "IpexGrantIssuer", "Context",
