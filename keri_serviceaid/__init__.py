@@ -16,6 +16,7 @@ from .providers import (
     Deliverer, PostmanDeliverer,
     IdempotencyStore, DynamoLedger, LMDBLedger,
 )
+from .local_runtime import LocalRuntime, LocalState, LocalCfg
 
 __all__ = [
     "ServiceAid", "Request", "Reply", "Command", "TestRuntime", "CredentialReq",
@@ -26,4 +27,5 @@ __all__ = [
     "Issuer", "IpexGrantIssuer", "Context",
     "Deliverer", "PostmanDeliverer",
     "IdempotencyStore", "DynamoLedger", "LMDBLedger",
+    "LocalRuntime", "LocalState", "LocalCfg",
 ]

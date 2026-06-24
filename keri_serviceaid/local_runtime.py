@@ -1,0 +1,74 @@
+"""LocalRuntime — the in-wallet adapter.
+
+Drives the keri_serviceaid pipeline against a wallet's LMDB Habery and ONE bound
+AID (hab) + its registry (rgy). Wires the local-variant providers, registers a
+capture handler per command route on hby.exc, and drains them through
+pipeline.process. The live mailbox transport is added in a later task; for
+tests/headless use, feed exns to the exchanger and call process_captured().
+
+No DynamoDB, no Qt — pure keripy."""
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from keri.vdr import verifying
+
+from . import pipeline
+from ._capture import _CaptureHandler
+from .contract import ServiceAid
+from .providers import (Allowlist, OracleVerifier, BoundResolver,
+                       IpexGrantIssuer, PostmanDeliverer, LMDBLedger, CredentialGate)
+
+
+@dataclass
+class LocalCfg:
+    alias: str            # registry name (pipeline reads state.cfg.alias)
+
+
+@dataclass
+class LocalState:
+    cfg: LocalCfg
+    hby: object
+    hab: object
+    rgy: object
+    svc: ServiceAid
+
+
+class LocalRuntime:
+    def __init__(self, svc: ServiceAid, *, hby, hab, rgy,
+                 idempotency=None, base_authz=None, verifier_tier="receipts"):
+        self.svc = svc
+        self.hby = hby
+        self.hab = hab
+        self.rgy = rgy
+
+        if svc.verifier is None:
+            svc.verifier = OracleVerifier(tier=verifier_tier)
+        if svc.resolver is None:
+            svc.resolver = BoundResolver(hab)
+        if svc.issuer is None:
+            svc.issuer = IpexGrantIssuer()
+        if svc.deliverer is None:
+            svc.deliverer = PostmanDeliverer()
+        if svc.idempotency is None:
+            svc.idempotency = idempotency or LMDBLedger(hby.db)
+        if svc.authz is None:
+            svc.authz = CredentialGate(hby=hby, reger=rgy.reger, svc=svc,
+                                       base=Allowlist(base_authz or []))
+
+        self.cred_verifier = verifying.Verifier(hby=hby, reger=rgy.reger)  # consumed by mailbox_doer() (Task 7) to admit IPEX-presented credentials
+
+        self.state = LocalState(cfg=LocalCfg(alias=svc.alias),
+                                hby=hby, hab=hab, rgy=rgy, svc=svc)
+
+        self._captures: dict = {}
+        for route in svc.routes:
+            handler = _CaptureHandler(resource=route)
+            self._captures[route] = handler
+            hby.exc.addHandler(handler)
+
+    def process_captured(self) -> None:
+        """Drain every capture handler and drive the pipeline per verified exn."""
+        for handler in self._captures.values():
+            for serder, attachments in handler.drain():
+                pipeline.process(self.state, serder, attachments)
