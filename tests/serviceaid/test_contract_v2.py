@@ -85,3 +85,30 @@ def test_request_now_returns_iso8601_timestamp():
     assert isinstance(ts, str)
     # iso8601 with date + 'T' separator (e.g. 2026-06-17T...)
     assert "T" in ts and ts[:4].isdigit() and ts[4] == "-"
+
+
+from keri_serviceaid import ServiceAid, CredentialReq
+
+
+def test_command_records_requires_credential():
+    svc = ServiceAid(alias="rating-engine")
+
+    @svc.command(route="/rate", issues="Equote",
+                 requires_credential=CredentialReq(schema="Ebroker"))
+    def rate(req):
+        ...
+
+    cmd = svc.lookup("/rate")
+    assert cmd.requires_credential == CredentialReq(schema="Ebroker")
+    assert cmd.requires_credential.presentation == "cache"
+    assert cmd.requires_credential.cadence == "revocation-recheck"
+
+
+def test_command_requires_credential_defaults_none():
+    svc = ServiceAid(alias="rating-engine")
+
+    @svc.command(route="/ping")
+    def ping(req):
+        ...
+
+    assert svc.lookup("/ping").requires_credential is None

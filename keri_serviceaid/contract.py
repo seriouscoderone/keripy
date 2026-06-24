@@ -51,6 +51,20 @@ class Reply:
         return cls(kind="reject", reason=reason)
 
 
+@dataclass(frozen=True)
+class CredentialReq:
+    """Per-command inbound credential requirement, enforced by CredentialGate.
+
+    `schema` is the required ACDC schema SAID the caller must hold (as issuee).
+    `issuer`, when set, additionally constrains who issued it. `presentation`
+    and `cadence` are the declared ceremony policy (v1 default: present once via
+    IPEX grant, cache, re-check TEL revocation per request)."""
+    schema: str
+    issuer: Optional[str] = None
+    presentation: str = "cache"          # "cache" | "embed" | "thread"
+    cadence: str = "revocation-recheck"
+
+
 @dataclass
 class Command:
     """Route → handler binding. `payload_schema` is an optional JSON-Schema for
@@ -59,6 +73,7 @@ class Command:
     payload_schema: Optional[dict]
     issues: str                       # ACDC schema SAID this command may issue
     fn: Callable[[Request], Reply]
+    requires_credential: Optional[CredentialReq] = None
 
 
 class ServiceAid:
@@ -83,7 +98,8 @@ class ServiceAid:
         self.schemas: list[dict] = []   # ACDC schema SADs to register at init
 
     def command(self, *, route: str, issues: str = "",
-                payload_schema: dict | None = None):
+                payload_schema: dict | None = None,
+                requires_credential: Optional["CredentialReq"] = None):
         if route.startswith("/ipex/"):
             raise ValueError(f"route {route!r} is reserved: /ipex/* is owned by "
                              "the IPEX protocol and may not be a command route")
@@ -92,7 +108,8 @@ class ServiceAid:
             if route in self._commands:
                 raise ValueError(f"duplicate route registered: {route}")
             self._commands[route] = Command(route=route, payload_schema=payload_schema,
-                                             issues=issues, fn=fn)
+                                             issues=issues, fn=fn,
+                                             requires_credential=requires_credential)
             return fn
         return deco
 
