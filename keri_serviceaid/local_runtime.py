@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from keri.app.indirecting import MailboxDirector
 from keri.vdr import verifying
 
 from . import pipeline
@@ -66,6 +67,17 @@ class LocalRuntime:
             handler = _CaptureHandler(resource=route)
             self._captures[route] = handler
             hby.exc.addHandler(handler)
+
+    def mailbox_doer(self, topics=None):
+        """A MailboxDirector (a hio DoDoer) that polls the bound AID's witness
+        mailbox, admits presented credentials (via self.cred_verifier), and routes
+        command exns to hby.exc — where this runtime's capture handlers receive
+        them. Mount it on the host Doist (the wallet does this via the plugin's
+        get_doers()), then call process_captured() to drive the pipeline."""
+        if topics is None:
+            topics = ["/receipt", "/credential", "/reply"]
+        return MailboxDirector(hby=self.hby, topics=topics,
+                               verifier=self.cred_verifier, exc=self.hby.exc)
 
     def process_captured(self) -> None:
         """Drain every capture handler and drive the pipeline per verified exn."""

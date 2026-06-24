@@ -94,3 +94,23 @@ def test_localruntime_processes_captured_command_and_delivers(issuer_hby, quote_
     rt.process_captured()
 
     assert len(fake.delivered) == 1     # one Quote grant delivered
+
+
+from keri.app.indirecting import MailboxDirector
+
+
+def test_mailbox_doer_built_with_exchanger_and_verifier(issuer_hby):
+    hab = issuer_hby.makeHab(name="rating-engine")
+    rgy = credentialing.Regery(hby=issuer_hby, name="rating-engine", temp=True)
+    svc = ServiceAid(alias="rating-engine")
+
+    @svc.command(route="/ping")
+    def ping(req):
+        return Reply.none()
+
+    rt = LocalRuntime(svc, hby=issuer_hby, hab=hab, rgy=rgy)
+    doer = rt.mailbox_doer(topics=["/credential", "/receipt"])
+
+    assert isinstance(doer, MailboxDirector)
+    assert "/credential" in doer.topics
+    assert doer.exchanger is issuer_hby.exc
