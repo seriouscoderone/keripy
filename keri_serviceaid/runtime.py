@@ -30,6 +30,7 @@ from keri.vdr import credentialing
 
 from .config import Config
 from .contract import ServiceAid
+from ._capture import _CaptureHandler
 from .providers import (Allowlist, OracleVerifier, OracleResolver,
                        IpexGrantIssuer, PostmanDeliverer, DynamoLedger)
 from .providers.idempotency import PROC_STORE
@@ -62,27 +63,6 @@ def reset():
         except Exception:
             logger.exception("error closing reger during reset")
     _state = None
-
-
-class _CaptureHandler:
-    """Exchanger behavior that stashes verified exns for synchronous dispatch."""
-
-    def __init__(self, resource):
-        self.resource = resource
-        self.captured = []   # list of (serder, attachments)
-
-    def verify(self, serder, attachments=None, **kw):
-        return True
-
-    def handle(self, serder, attachments=None, **kw):
-        self.captured.append((serder, attachments or []))
-
-    def drain(self):
-        """Return all captured exns and clear the buffer (sole read path —
-        prevents a stale capture from a prior request leaking into a later
-        response on a warm Lambda)."""
-        out, self.captured = self.captured, []
-        return out
 
 
 def _dynamo_kwa(cfg: Config) -> dict:
