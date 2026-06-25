@@ -5,6 +5,9 @@ import base64
 import os
 import logging
 
+from keri.core import serdering
+from keri.kering import Ilks
+
 # Resolve libsodium BEFORE any keri import (keri imports are deferred into
 # init()). On the zip+KeriRuntimeLayer entrypoint (witness_handler.handler)
 # there is no bootstrap wrapper, so the handler installs the find_library
@@ -407,34 +410,65 @@ def handle_cesr_ingest(event):
 def handle_receipt_post(event):
     """POST /receipts -- ingest event, return signed witness receipt as CESR.
 
-    Synchronous receipt-back flow used by kli incept --receipt-endpoint
-    and any agent calling streamCESRRequests with path='/receipts'.
-    Body+CESR-ATTACHMENT header format from real KERI clients is
-    accepted (and inline-body-only also works for backward compat).
+    Matches canonical ReceiptEnd.on_post: a receipt is returned for any event
+    this witness holds (and is a designated witness for), whether the POST is
+    the first-seen acceptance OR a re-request of an already-held event. A
+    re-request of a held event must NOT return 204 — that left burst-under-
+    receipted events permanently unrecoverable. Duplicity guard (stricter than
+    canonical): only sign the first-seen said recorded at that (pre, sn).
     """
     ims = _extract_cesr_stream(event)
     if not ims:
         return response(400, {"error": "empty body"})
-    # framed=True for the same reason as handle_cesr_ingest: one HTTP
-    # request = one frame; -V-wrapped attachments otherwise hang the parser.
+
+    # Capture the inbound event serder BEFORE psr.parse drains `ims`.
+    try:
+        serder = serdering.SerderKERI(raw=bytes(ims))
+    except Exception:  # noqa: BLE001 — non-event payloads fall through to 204
+        serder = None
+
+    # framed=True: one HTTP request == one frame (streamCESRRequests contract).
     _hby.psr.parse(ims=ims, framed=True)
     _hby.kvy.processEscrows()
+
+    # First-seen path (unchanged): a fresh acceptance produced a receipt cue.
     receipts = _drain_receipt_cues(_hby, _hab)
-    if not receipts:
-        return response(204, None)
-    # Re-parse so Kevery routes the witness's own receipts into our
-    # db.wigs / db.rcts, where handle_receipt_get can find them later.
-    _hby.psr.parse(ims=bytearray(receipts))
-    # CESR qb64 is pure ASCII. Return as plain text body (no base64, no
-    # isBase64Encoded). API Gateway then sends bytes unchanged regardless
-    # of the client's Accept header — kli/signify/keria all default to
-    # Accept: */* and would otherwise receive base64 text that their
-    # CESR parser cannot decode.
-    return {
-        "statusCode": 200,
-        "headers": {"Content-Type": "application/cesr"},
-        "body": bytes(receipts).decode("utf-8"),
-    }
+    if receipts:
+        _hby.psr.parse(ims=bytearray(receipts))
+        return {
+            "statusCode": 200,
+            "headers": {"Content-Type": "application/cesr"},
+            "body": bytes(receipts).decode("utf-8"),
+        }
+
+    # Receipt-on-held fallback: re-serve the receipt for an event we already
+    # hold (canonical ReceiptEnd.on_post behavior).
+    if serder is not None and serder.ked.get("t") in (
+            Ilks.icp, Ilks.rot, Ilks.ixn, Ilks.dip, Ilks.drt):
+        pre = serder.pre
+        if pre in _hby.kevers:
+            kever = _hby.kevers[pre]
+            if _hab.pre not in kever.wits:
+                return response(400, {"error": f"{_hab.pre} is not a witness for {pre}"})
+            held = _hby.db.kels.getLast(keys=pre, on=serder.sn)
+            if held is None:
+                return response(202, None)
+            held = held.decode("utf-8") if isinstance(held, (bytes, bytearray)) else held
+            if held != serder.said:
+                logger.warning(
+                    "receipt.duplicitous pre=%s sn=%s held=%s inbound=%s",
+                    pre, serder.sn, held, serder.said)
+                return response(400, {"error": "conflicting event; refusing duplicitous receipt"})
+            rct = _hab.receipt(serder)
+            _hby.psr.parse(ims=bytearray(rct))
+            return {
+                "statusCode": 200,
+                "headers": {"Content-Type": "application/cesr"},
+                "body": bytes(rct).decode("utf-8"),
+            }
+        return response(202, None)
+
+    return response(204, None)
 
 
 def handle_receipt_get(event):
