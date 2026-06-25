@@ -24,7 +24,7 @@ from ..kering import (MissingEntryError, UntrustedKeyStateSource,
                       TraitDex, Vrsn_1_0, Vrsn_2_0, GVC_1_0, GVC_2_0,
                       Roles, Schemes, Ilks, versify, Kinds)
 
-from ..help import helping
+from ..help import helping, Reb64
 
 from .coring import (PreDex, DigDex, NonTransDex, NumDex, Prefixer,
                      Diger, Number, Seqner, Cigar, Dater, Noncer,
@@ -1383,7 +1383,7 @@ def exchept(sender="",
             nonce=None,
             stamp=None,
             version=Vrsn_2_0,
-            pvrsn=Vrsn_2_0,
+            pvrsn=None,
             gvrsn=None,
             kind=Kinds.json):
     """Utility function to automate creation of exchange incept, exchept, 'xip',
@@ -1463,8 +1463,8 @@ def exchange(*,
              modifiers=None,
              attributes=None,
              stamp=None,
-             version=Vrsn_2_0,
-             pvrsn=Vrsn_2_0,
+             version=Version,
+             pvrsn=None,
              gvrsn=None,
              kind=Kinds.json,):
     """ Create an `exn` message with the specified route and payload
@@ -1495,23 +1495,29 @@ def exchange(*,
     pvrsn = pvrsn if pvrsn is not None else version
     vs = versify(pvrsn=pvrsn, kind=kind, size=0, gvrsn=gvrsn)  # ensures cesr v2 only
 
-    ilk = Ilks.exn
-
     if pvrsn.major < 2:
-        raise ValueError(f"Unsupported version {pvrsn=}")
-
-    else:
-
         sad = dict(v=vs,
-                   t=ilk,
-                   d="",
+                  t=Ilks.exn,
+                  d="", # computed by SerderKERI init
+                  i=sender if sender is not None else "",
+                  rp=receiver if receiver is not None else "",
+                  p=prior if prior is not None else "",
+                  dt=stamp if stamp is not None else helping.nowIso8601(),
+                  r=route if route is not None else "",
+                  q=modifiers if modifiers is not None else {},
+                  a=attributes if attributes is not None else {})
+
+    else:  # v2
+        sad = dict(v=vs,
+                   t=Ilks.exn,
+                   d="",  # computed by SerderKERI init
                    i=sender if sender is not None else "",
                    ri=receiver if receiver is not None else "",
                    x=xid if xid is not None else "",
                    p=prior if prior is not None else "",
                    dt=stamp if stamp is not None else helping.nowIso8601(),
                    r=route if route is not None else "",
-                   q=modifiers if modifiers is not None else {},  # q field required
+                   q=modifiers if modifiers is not None else {},
                    a=attributes if attributes is not None else {}
                    )
 
@@ -1519,8 +1525,8 @@ def exchange(*,
 
 
 def messagize(serder, *, sigers=None, source=None, bonds=None, wigers=None,
-                         cigars=None, framed=False, nested=False, gvrsn=Version,
-                         genusify=False):
+                         cigars=None, nests=None, framed=False, nested=False,
+                         gvrsn=Version, genusify=False):
     """Attaches authenticator(s) from sigers (with or without source as seal) and/or
     cigars and/or wigers and/or bonds. A bond is typically a seal reference to
     an event with anchoring seal of message as authenticator. In v2 bonds may
@@ -1530,7 +1536,7 @@ def messagize(serder, *, sigers=None, source=None, bonds=None, wigers=None,
         serder (SerderKERI): instance containing the event
         sigers (list): of Siger instances (optional) to create indexed signatures
                        based on seal type if any
-        source (SealEvent|SealLast|None): optiona modifier to sigers when provided
+        source (SealEvent|SealLast|None): optional modifier to sigers when provided
                 If SealEvent use attachment group code TransIdxSigGroups plus attach
                     triple pre+snu+dig made from (i,s,d) of seal plus ControllerIdxSigs
                     plus attached indexed sigs in sigers
@@ -1546,6 +1552,11 @@ def messagize(serder, *, sigers=None, source=None, bonds=None, wigers=None,
         cigars (list): optional list of Cigars instances of non-transferable non indexed
             signatures from  which to form receipt couples.
             Each cigar.vefer.qb64 is pre of receiptor and cigar.qb64 is signature
+        nests (list[str|bytes|bytearray]|None): of nested msg substreams.
+                    Each element stream with message + attachments. Attachements
+                    must be enclosed in either AttachmentGroup or
+                    BodyWithAttachmentGroup. When True forces gvrsn to V2 and
+                    forces either nested to True or framed to false
         framed (bool): True means each message plus attachments may be assumed to
                             be isolated as frame when parsing so do not need
                             attachment group
@@ -1553,7 +1564,7 @@ def messagize(serder, *, sigers=None, source=None, bonds=None, wigers=None,
                             attachments may not be isolated as frame when parsing
         nested (bool): True means messagize for non-top level
                             This forces non-native serializion to be embedded
-                            in non-native group code
+                            in non-native group code. When True forces gvrsn to V2
                        False means messagize for top level of stream.
                             This allows bare non-native serialization of message
         gvrsn (Versionage): CESR Genus version for attachment group codes or
@@ -1573,8 +1584,11 @@ def messagize(serder, *, sigers=None, source=None, bonds=None, wigers=None,
 
     svrsn = serder.gvrsn if serder.gvrsn else serder.pvrsn  # effective serder gvrsn
 
-    if nested and gvrsn.major < 2:
+    if (nested or nests) and gvrsn.major < 2:
         gvrsn = Vrsn_2_0  # force gvrsn to v2 for nesting
+
+    if nests and not nested and framed:
+        nested = True
 
     if (gvrsn.major < svrsn.major or
             (gvrsn.major == svrsn.major and gvrsn.minor < svrsn.minor)):
@@ -1753,6 +1767,15 @@ def messagize(serder, *, sigers=None, source=None, bonds=None, wigers=None,
                                         code=Codens.NonTransReceiptCouples,
                                         version=gvrsn))
 
+        if nests:
+            for nest in nests:  # list of msg substreams
+                if hasattr(nest, 'encode'):
+                    nest.encode()
+                if not Reb64.match(nest):  # idiot proof not at least Base64
+                    raise ValueError("Substream not Base64")
+
+                aims.extend(nest)
+
         if len(aims) % 4:
             raise ValueError(f"Invalid attachments size={len(aims)}, "
                              f"nonintegral quadlets.")
@@ -1780,7 +1803,7 @@ def messagize(serder, *, sigers=None, source=None, bonds=None, wigers=None,
             msg.extend(aims)  # attach attachments
 
     else:  # not a supported gvrsn for attachments and nesting
-        raise ValueError(f"Unsupported protocol version={serder.pvrsn}")
+        raise ValueError(f"Unsupported configuration for protocol version={serder.pvrsn}")
 
     gims.extend(msg)
     return gims
@@ -4577,7 +4600,7 @@ class Kevery:
         Parameters:
             serder (SerderKERI): message instance
             kwa (dict | None): parser exts / attachment dict (sigers, cigars, tsgs,
-                   ssgs, sscs, ssts, tdcs, wigers, trqs, frcs, ptds, essrs,
+                   lsgs, sscs, ssts, tdcs, wigers, trqs, frcs, ptds, essrs,
                    bsqs, bsss, tmqs, local, etc.); mutated in place (KRAM
                    normalization, rvy/exc/tvy pops, qry source/sigers).
                    Also accepts processor overrides injected by parser:
@@ -4627,9 +4650,10 @@ class Kevery:
         # Step 3: Dispatch to message-specific processing
         match ilk:
             case Ilks.qry:
-                # Extract source and sigers from ssgs (like parser originally did)
-                if kwa.get('ssgs'):
-                    pre, sigers = kwa['ssgs'][-1]
+                # Extract source and sigers from lsgs (last sig groups)
+                # trans last indexed sig groups
+                if kwa.get('lsgs'):
+                    pre, sigers = kwa['lsgs'][-1]
                     kwa['source'] = pre
                     kwa['sigers'] = sigers
                 elif kwa['sigers'] and not kwa.get('source'):
