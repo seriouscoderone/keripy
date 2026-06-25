@@ -39,17 +39,24 @@ docker run --rm --platform linux/arm64 \
 
     # Copy the libsodium shared object(s) into lib/ (-> /opt/lib).
     # Search the whole image because the package path varies by distro.
+    # cp -L (dereference) so versioned names land as REAL files in lib/, matching
+    # the known-good deployed layer (v41), whose libsodium.so.26 is a real file
+    # (recent dnf ships it as a symlink, which cp -P would preserve). libsodium is
+    # located at runtime by the bootstrap.ensure_libsodium() find_library patch
+    # (handles either), but real files are the conservative choice and avoid any
+    # symlink-through-CDK-zip fragility. (Keep this comment apostrophe-free: it
+    # lives inside the docker -c single-quoted block.)
     found=0
     for d in /usr/lib64 /usr/lib /lib64 /lib; do
       for f in "$d"/libsodium.so*; do
         [ -e "$f" ] || continue
-        cp -P "$f" /work/keri_cdk/layers/keri_runtime/lib/
+        cp -L "$f" /work/keri_cdk/layers/keri_runtime/lib/
         found=1
       done
     done
     if [ "$found" = 0 ]; then
       # Last resort: hunt the whole filesystem.
-      find / -name "libsodium.so*" 2>/dev/null -exec cp -P {} /work/keri_cdk/layers/keri_runtime/lib/ \; || true
+      find / -name "libsodium.so*" 2>/dev/null -exec cp -L {} /work/keri_cdk/layers/keri_runtime/lib/ \; || true
     fi
 
     # Trim weight: tests, bytecode caches, dist-info that the runtime never needs.

@@ -1273,8 +1273,11 @@ class Baser(LMDBer):
                                                   klas=(coring.Prefixer, coring.Number,
                                                         coring.Diger, indexing.Siger))
 
-        # tsgs: trans last sig groups (prefixer, number, diger, siger) — stored per-siger
-        self.kramTSGS = subing.CatCesrIoSetSuber(db=self, subkey='tsgs.',
+        # ktsg: KRAM trans last sig groups (prefixer, number, diger, siger) — stored
+        # per-siger. Distinct 'ktsg.' subkey (NOT 'tsgs.'): upstream keripy owns
+        # 'tsgs.' for self.tsgs (rpy trans-sigs, used by routing.processReply); the
+        # fork's KRAM repurposing of 'tsgs.' collided and broke rpy/OOBI routing.
+        self.kramTSGS = subing.CatCesrIoSetSuber(db=self, subkey='ktsg.',
                                                   klas=(coring.Prefixer, coring.Number,
                                                         coring.Diger, indexing.Siger))
 

@@ -5,9 +5,6 @@ import base64
 import os
 import logging
 
-from keri.core import serdering
-from keri.kering import Ilks
-
 # Resolve libsodium BEFORE any keri import (keri imports are deferred into
 # init()). On the zip+KeriRuntimeLayer entrypoint (witness_handler.handler)
 # there is no bootstrap wrapper, so the handler installs the find_library
@@ -417,6 +414,12 @@ def handle_receipt_post(event):
     receipted events permanently unrecoverable. Duplicity guard (stricter than
     canonical): only sign the first-seen said recorded at that (pre, sn).
     """
+    # keri imports are deferred to here (after init()/ensure_libsodium has
+    # patched find_library) per this module's "resolve libsodium BEFORE any
+    # keri import" contract — a module-top keri import crashes the Lambda
+    # runtime with "Unable to find libsodium".
+    from keri.core import serdering
+    from keri.kering import Ilks
     ims = _extract_cesr_stream(event)
     if not ims:
         return response(400, {"error": "empty body"})

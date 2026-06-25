@@ -54,7 +54,7 @@ BASER_STORES = [
                # never add to SHARED_KEL_STORES.
     # KRAM stores
     "ctyp.",   "msgc.",   "tmsc.",   "pmkm.",   "pmks.",
-    "pmsk.",   "trqs.",   "tsgs.",   "sscs.",   "ssts.",
+    "pmsk.",   "trqs.",   "tsgs.",   "ktsg.",   "sscs.",   "ssts.",
     "frcs.",   "tdcs.",   "ptds.",   "bsqs.",   "bsss.",
     "tmqs.",
 ]
@@ -409,8 +409,13 @@ def setup_baser(dber):
                                                     coring.Number,
                                                     coring.Diger,
                                                     indexing.Siger))
-    # KRAM trans last sig groups
-    dber.kramTSGS = subing.CatCesrIoSetSuber(db=dber, subkey='tsgs.',
+    # Upstream Baser db.tsgs: trans sig groups on signed rpy (end-role/loc) replies,
+    # used by routing.processReply — the OOBI/end-role path. MUST own 'tsgs.'; its
+    # absence here was the 'DynamoDBer has no attribute tsgs' 500 on witness OOBI.
+    dber.tsgs = subing.CesrIoSetSuber(db=dber, subkey='tsgs.', klas=indexing.Siger)
+    # KRAM trans last sig groups — distinct 'ktsg.' subkey (NOT 'tsgs.', which
+    # upstream owns for db.tsgs above; the fork's KRAM repurposing collided).
+    dber.kramTSGS = subing.CatCesrIoSetSuber(db=dber, subkey='ktsg.',
                                               klas=(coring.Prefixer,
                                                     coring.Number,
                                                     coring.Diger,
