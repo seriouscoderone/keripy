@@ -50,6 +50,12 @@ class Reply:
     def reject(cls, *, reason: str) -> "Reply":
         return cls(kind="reject", reason=reason)
 
+    @classmethod
+    def revoke(cls, *, recipient: str, credential_said: str,
+               reason: str = "") -> "Reply":
+        return cls(kind="revoke", recipient=recipient,
+                   attributes={"credential_said": credential_said}, reason=reason)
+
 
 @dataclass(frozen=True)
 class CredentialReq:
