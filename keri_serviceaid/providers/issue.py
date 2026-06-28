@@ -131,6 +131,52 @@ class IpexGrantIssuer:
                   verifier=verifier, credentialer=credentialer, cred_said=creder.said)
         return _frame_grant(hby, hab, rgy, creder.said, recipient, message, timestamp)
 
+    def revoke(self, reply: Reply, ctx: Context) -> bytearray:
+        """Fire a TEL `rev` event for `reply.attributes["credential_said"]`,
+        anchor it in the issuer's KEL, complete in-process (v1 = no-backer), and
+        return a CESR notice carrying the revocation TEL event to the recipient.
+
+        Mirrors the `issue` path: registry.revoke -> SealEvent -> hab.interact
+        anchor -> Registrar.revoke -> _complete. Inherits the witnessed-AID
+        limitation documented at module top: the anchor ixn is created here, so a
+        WITNESSED registry's receipts cannot pre-converge on a virtual-time
+        Doist. v1 deploy uses a no-backer registry.
+        """
+        return self._revoke_grant(
+            ctx.hby, ctx.hab, ctx.rgy,
+            said=reply.attributes["credential_said"], recipient=reply.recipient,
+            registry_name=ctx.registry_name)
+
+    def _revoke_grant(self, hby, hab, rgy, *, said, recipient,
+                      registry_name="svc", message="", timestamp=None) -> bytearray:
+        """Revoke the ACDC `said` and return a CESR notice framing the rev event.
+
+        Partial-failure semantics mirror `_issue_grant`: a death after
+        `hab.interact` but before `_complete` leaves a harmless orphan KEL anchor
+        with the rev event in escrow; the next `_complete` pumps it through.
+        """
+        timestamp = timestamp or helping.nowIso8601()
+        ensure_registry(hby, hab, rgy, name=registry_name)
+        counselor = grouping.Counselor(hby=hby)
+        registrar = credentialing.Registrar(hby=hby, rgy=rgy, counselor=counselor)
+        registry = rgy.registryByName(registry_name)
+        # registry.revoke(said, dt) -> SerderKERI of the rev/brv TEL event.
+        rserder = registry.revoke(said=said, dt=timestamp)
+        rseal = eventing.SealEvent(rserder.pre, rserder.snh, rserder.said)
+        rseal = dict(i=rseal.i, s=rseal.s, d=rseal.d)
+        if registry.estOnly:
+            anc = hab.rotate(data=[rseal])
+        else:
+            anc = hab.interact(data=[rseal])
+        aserder = serdering.SerderKERI(raw=bytes(anc))
+        # Registrar.revoke(creder, rserder, anc): the real signature names the rev
+        # event `rserder` (NOT `serder`); creder must be the SerderACDC (it reads
+        # creder.regid), recovered via reger.cloneCred(said)[0].
+        creder = rgy.reger.cloneCred(said=said)[0]
+        registrar.revoke(creder=creder, rserder=rserder, anc=aserder)
+        _complete(rgy, registrar, rserder.pre, rserder.sn)
+        return _frame_revoke(hby, hab, rgy, said, recipient, message, timestamp)
+
 
 def _frame_grant(hby, hab, rgy, said, recp, message, timestamp) -> bytearray:
     creder, prefixer, seqner, saider = rgy.reger.cloneCred(said=said)
@@ -143,6 +189,30 @@ def _frame_grant(hby, hab, rgy, said, recp, message, timestamp) -> bytearray:
     anc = hby.db.cloneEvtMsg(pre=serder.pre, fn=0, dig=serder.said)
     exn, atc = protocoling.ipexGrantExn(hab=hab, recp=recp, message=message,
                                         acdc=acdc, iss=iss, anc=anc, dt=timestamp)
+    msg = bytearray(exn.raw)
+    msg.extend(atc)
+    return msg
+
+
+def _frame_revoke(hby, hab, rgy, said, recp, message, timestamp) -> bytearray:
+    """Frame the latest revocation TEL event into an IPEX grant-style notice the
+    holder observes, mirroring `_frame_grant`.
+
+    Deviation from issue: `cloneTvtAt(said, sn=0)` is the `iss` event; the `rev`
+    event for a single-issuance credential is at TEL sn=1, so we clone sn=1 and
+    pass it as `iss` (the grant exn's TEL-event embed slot). The anchoring KEL
+    event is the issuer's LATEST sealing event for the rev seal (not the
+    issuance one), recovered via fetchLastSealingEventByEventSeal."""
+    creder, prefixer, seqner, saider = rgy.reger.cloneCred(said=said)
+    acdc = signing.serialize(creder, prefixer, seqner, saider)
+    rev = rgy.reger.cloneTvtAt(creder.said, sn=1)
+    rserder = serdering.SerderKERI(raw=bytes(rev))
+    sq = coring.Seqner(sn=rserder.sn)
+    serder = hby.db.fetchLastSealingEventByEventSeal(
+        creder.sad["i"], seal=dict(i=rserder.pre, s=sq.snh, d=rserder.said))
+    anc = hby.db.cloneEvtMsg(pre=serder.pre, fn=0, dig=serder.said)
+    exn, atc = protocoling.ipexGrantExn(hab=hab, recp=recp, message=message,
+                                        acdc=acdc, iss=rev, anc=anc, dt=timestamp)
     msg = bytearray(exn.raw)
     msg.extend(atc)
     return msg
