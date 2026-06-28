@@ -75,6 +75,16 @@ def process(state, serder, attachments) -> None:
         logger.info("issued + delivered grant for %s to %s", said, endpoint.eid)
         return
 
+    if reply.kind == "revoke":
+        ctx = Context(hby=state.hby, hab=state.hab, rgy=state.rgy,
+                      registry_name=state.cfg.alias)
+        notice = svc.issuer.revoke(reply, ctx)
+        svc.idempotency.record(said, notice)    # BEFORE delivery (exactly-once revoke)
+        endpoint = svc.resolver.resolve(sender, state.hby)
+        svc.deliverer.deliver(notice, endpoint, ctx)
+        logger.info("revoked + delivered notice for %s to %s", said, endpoint.eid)
+        return
+
     # reject / none → v1: log, no reply.
     logger.info("command %s returned kind=%s — no reply (v1 grant+silence)",
                 route, reply.kind)
