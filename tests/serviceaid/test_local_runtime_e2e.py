@@ -16,6 +16,7 @@ from keri_serviceaid import (ServiceAid, Reply, CredentialReq, LocalRuntime,
                              IpexGrantIssuer, Endpoint)
 
 from _schema import RATING_SCHEMA_SAD, BROKER_SCHEMA_SAD
+from _exn import make_exn
 
 
 class FakeResolver:
@@ -65,8 +66,7 @@ def test_gated_rate_issues_quote(issuer_hby, recipient_pre):
         issuer_hby, hab, rgy, schema_said=broker_said, recipient=recipient_pre,
         attributes={"license": "B-123"}, registry_name="rating-engine")
 
-    exn, _ = exchanging.exchange(route="/rate", sender=recipient_pre,
-                                 receiver=hab.pre, attributes={"coverage": "auto"})
+    exn = make_exn("/rate", recipient_pre, hab.pre, {"coverage": "auto"})
     rt._captures["/rate"].handle(exn, attachments=[])
     rt.process_captured()
 
@@ -79,8 +79,7 @@ def test_gated_rate_denied_without_credential(issuer_hby, recipient_pre):
     hab, rgy, rt, fake = _build(issuer_hby, broker_said, quote_said)
 
     # No credential admitted -> CredentialGate denies -> silent drop.
-    exn, _ = exchanging.exchange(route="/rate", sender=recipient_pre,
-                                 receiver=hab.pre, attributes={"coverage": "auto"})
+    exn = make_exn("/rate", recipient_pre, hab.pre, {"coverage": "auto"})
     rt._captures["/rate"].handle(exn, attachments=[])
     rt.process_captured()
 

@@ -18,10 +18,10 @@ def test_deliver_calls_poster_send_with_dest_and_topic():
 
     from keri.app.habbing import Habery
     from keri.core.signing import Salter
-    from keri.peer import exchanging
+    from _exn import make_exn
     hby = Habery(name="svc", temp=True, salt=Salter(raw=b'0123456789abcdef').qb64)
     hab = hby.makeHab(name="svc", transferable=True)
-    exn, _ = exchanging.exchange(route="/ipex/grant", attributes={}, sender=hab.pre)
+    exn = make_exn("/ipex/grant", hab.pre, attributes={})
     msg = bytearray(exn.raw)
 
     ep = Endpoint(role="mailbox", eid="EMbx", url="https://mailbox.keri.host")

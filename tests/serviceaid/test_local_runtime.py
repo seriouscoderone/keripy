@@ -12,6 +12,7 @@ from keri_serviceaid import (ServiceAid, Reply, LocalRuntime, BoundResolver,
                              IpexGrantIssuer, PostmanDeliverer)
 
 from _schema import RATING_SCHEMA_SAD
+from _exn import make_exn
 
 
 class FakeDeliverer:
@@ -87,8 +88,7 @@ def test_localruntime_processes_captured_command_and_delivers(issuer_hby, quote_
     rt = LocalRuntime(svc, hby=issuer_hby, hab=hab, rgy=rgy)
 
     # Build a /rate command exn from recipient_pre, addressed to the bound hab.
-    exn, _end = exchanging.exchange(route="/rate", sender=recipient_pre,
-                                    receiver=hab.pre, attributes={"coverage": "auto"})
+    exn = make_exn("/rate", recipient_pre, hab.pre, {"coverage": "auto"})
     # Inject as a verified capture (headless analogue of the live mailbox path).
     rt._captures["/rate"].handle(exn, attachments=[])
     rt.process_captured()
@@ -138,7 +138,6 @@ def test_process_captured_suppresses_per_exn_errors(issuer_hby, quote_schema, re
     svc.resolver = RaisingResolver()
     rt = LocalRuntime(svc, hby=issuer_hby, hab=hab, rgy=rgy)
 
-    exn, _ = exchanging.exchange(route="/rate", sender=recipient_pre,
-                                 receiver=hab.pre, attributes={})
+    exn = make_exn("/rate", recipient_pre, hab.pre, {})
     rt._captures["/rate"].handle(exn, attachments=[])
     rt.process_captured()   # must NOT raise despite the resolver LookupError
