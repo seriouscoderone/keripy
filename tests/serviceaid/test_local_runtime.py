@@ -96,24 +96,29 @@ def test_localruntime_processes_captured_command_and_delivers(issuer_hby, quote_
     assert len(fake.delivered) == 1     # one Quote grant delivered
 
 
-from keri.app.indirecting import MailboxDirector
-
-
-def test_mailbox_doer_built_with_exchanger_and_verifier(issuer_hby):
+def test_runtime_exposes_inbound_contract_for_host_injected_poller(issuer_hby):
+    """A Service-AID is hosted by a node, not a node itself: the runtime does NOT
+    build a mailbox poller. It exposes the contract the host injects one against:
+    command_topics (derived from routes), the cred_verifier the poller wires for
+    IPEX admit, and capture handlers registered on hby.exc (where a poller feeds)."""
     hab = issuer_hby.makeHab(name="rating-engine")
     rgy = credentialing.Regery(hby=issuer_hby, name="rating-engine", temp=True)
     svc = ServiceAid(alias="rating-engine")
 
-    @svc.command(route="/ping")
-    def ping(req):
+    @svc.command(route="/insurance/cmd/grant_license")
+    def grant(req):
         return Reply.none()
 
     rt = LocalRuntime(svc, hby=issuer_hby, hab=hab, rgy=rgy)
-    doer = rt.mailbox_doer(topics=["/credential", "/receipt"])
 
-    assert isinstance(doer, MailboxDirector)
-    assert "/credential" in doer.topics
-    assert doer.exchanger is issuer_hby.exc
+    # command topic = first route segment (keripy Postman forwarding default)
+    assert rt.command_topics == ["insurance"]
+    # cred_verifier exposed for the host to wire into its injected poller
+    assert rt.cred_verifier is not None
+    # capture handler registered on the Habery's exchanger (where a poller feeds)
+    assert "/insurance/cmd/grant_license" in issuer_hby.exc.routes
+    # the runtime no longer manufactures transport — that is the host's job
+    assert not hasattr(rt, "mailbox_doer")
 
 
 class RaisingResolver:

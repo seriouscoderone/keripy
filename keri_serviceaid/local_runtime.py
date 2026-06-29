@@ -3,8 +3,14 @@
 Drives the keri_serviceaid pipeline against a wallet's LMDB Habery and ONE bound
 AID (hab) + its registry (rgy). Wires the local-variant providers, registers a
 capture handler per command route on hby.exc, and drains them through
-pipeline.process. The live mailbox transport is added in a later task; for
-tests/headless use, feed exns to the exchanger and call process_captured().
+pipeline.process.
+
+Inbound transport is the HOST's responsibility, not the library's. A Service-AID
+is an application that a KERI node hosts — it is not itself a node, so it never
+constructs its own mailbox poller. The host injects one (e.g. the wallet's
+MailboxDirector / vault.mbx) that feeds hby.exc (where this runtime registers its
+capture handlers) and polls `command_topics`. For tests/headless use, feed exns
+to the exchanger directly and call process_captured().
 
 No DynamoDB, no Qt — pure keripy."""
 from __future__ import annotations
@@ -12,7 +18,6 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from keri.app.indirecting import MailboxDirector
 from keri.vdr import verifying
 
 from . import pipeline
@@ -41,9 +46,11 @@ class LocalState:
 class LocalRuntime:
     """The in-wallet adapter wiring local providers + capture handlers.
 
-    Caller owns lifecycle: close the LMDBLedger (idempotency) and stop the
-    mailbox doer on unbind/vault-close — that teardown is the wallet plugin's
-    job (Plan 2)."""
+    Inbound transport is injected by the host: it mounts a mailbox poller that
+    feeds hby.exc (where this runtime registers its capture handlers) and polls
+    `command_topics`; the runtime never constructs one (a Service-AID is hosted
+    by a node, it is not a node). Caller owns lifecycle: close the LMDBLedger
+    (idempotency) and stop the injected poller on unbind/vault-close."""
 
     def __init__(self, svc: ServiceAid, *, hby, hab, rgy,
                  idempotency=None, base_authz=None, verifier_tier="receipts"):
@@ -66,7 +73,7 @@ class LocalRuntime:
             svc.authz = CredentialGate(hby=hby, reger=rgy.reger, svc=svc,
                                        base=Allowlist(base_authz or []))
 
-        self.cred_verifier = verifying.Verifier(hby=hby, reger=rgy.reger)  # consumed by mailbox_doer() (Task 7) to admit IPEX-presented credentials
+        self.cred_verifier = verifying.Verifier(hby=hby, reger=rgy.reger)  # the host wires this into its injected poller to admit IPEX-presented credentials
 
         self.state = LocalState(cfg=LocalCfg(alias=svc.alias),
                                 hby=hby, hab=hab, rgy=rgy, svc=svc)
@@ -77,21 +84,19 @@ class LocalRuntime:
             self._captures[route] = handler
             hby.exc.addHandler(handler)
 
-    def mailbox_doer(self, topics=None):
-        """A MailboxDirector (a hio DoDoer) that polls the bound AID's witness
-        mailbox, admits presented credentials (via self.cred_verifier), and routes
-        command exns to hby.exc — where this runtime's capture handlers receive
-        them. Mount it on the host Doist (the wallet does this via the plugin's
-        get_doers()), then call process_captured() to drive the pipeline.
+    @property
+    def command_topics(self) -> list[str]:
+        """Mailbox topics the host's injected poller must poll to receive this
+        Service-AID's command exns.
 
-        NOTE: MailboxDirector polls ALL habs in the Habery, not only the bound
-        hab; Plan 2 should scope polling to the bound AID (or accept wallet-wide
-        polling). Captured command exns are still gated to the bound hab by the
-        pipeline."""
-        if topics is None:
-            topics = ["/receipt", "/credential", "/reply"]
-        return MailboxDirector(hby=self.hby, topics=topics,
-                               verifier=self.cred_verifier, exc=self.hby.exc)
+        A command exn is forwarded under the first segment of its route (the
+        keripy Postman default: ``route.strip("/").split("/")[0]`` — e.g. a
+        ``/insurance/cmd/grant_license`` command arrives under topic
+        ``"insurance"``). The host adds these to whatever standard topics it
+        already polls (``/receipt``, ``/credential``, ...). The runtime exposes
+        them; the host owns the poller (dependency injection)."""
+        return sorted({route.strip("/").split("/")[0]
+                       for route in self.svc.routes if route.strip("/")})
 
     def process_captured(self) -> None:
         """Drain every capture handler and drive the pipeline per verified exn.
