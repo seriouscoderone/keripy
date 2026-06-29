@@ -47,17 +47,25 @@ class LocalRuntime:
     """The in-wallet adapter wiring local providers + capture handlers.
 
     Inbound transport is injected by the host: it mounts a mailbox poller that
-    feeds hby.exc (where this runtime registers its capture handlers) and polls
-    `command_topics`; the runtime never constructs one (a Service-AID is hosted
-    by a node, it is not a node). Caller owns lifecycle: close the LMDBLedger
-    (idempotency) and stop the injected poller on unbind/vault-close."""
+    feeds the exchanger this runtime registers its capture handlers on, and polls
+    `command_topics`; the runtime never constructs the poller (a Service-AID is
+    hosted by a node, it is not a node). The host also injects WHICH exchanger to
+    register on via `exc` — a standalone Habery's `hby.exc`, or, inside a wallet
+    that runs its own exchanger (e.g. Locksmith's `vault.exc`), that one — since
+    the host's poller feeds *that* exchanger, not necessarily `hby.exc`. Caller
+    owns lifecycle: close the LMDBLedger (idempotency) and stop the injected
+    poller on unbind/vault-close."""
 
-    def __init__(self, svc: ServiceAid, *, hby, hab, rgy,
+    def __init__(self, svc: ServiceAid, *, hby, hab, rgy, exc=None,
                  idempotency=None, base_authz=None, verifier_tier="receipts"):
         self.svc = svc
         self.hby = hby
         self.hab = hab
         self.rgy = rgy
+        # The exchanger the host's mailbox poller feeds. Defaults to the Habery's
+        # own exchanger (standalone/tests); a wallet host passes its own (the
+        # instance its MailboxDirector parses into — e.g. Locksmith's vault.exc).
+        self.exc = exc if exc is not None else hby.exc
 
         if svc.verifier is None:
             svc.verifier = OracleVerifier(tier=verifier_tier)
@@ -82,7 +90,7 @@ class LocalRuntime:
         for route in svc.routes:
             handler = _CaptureHandler(resource=route)
             self._captures[route] = handler
-            hby.exc.addHandler(handler)
+            self.exc.addHandler(handler)
 
     @property
     def command_topics(self) -> list[str]:

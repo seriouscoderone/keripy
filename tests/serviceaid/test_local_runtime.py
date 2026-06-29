@@ -115,10 +115,36 @@ def test_runtime_exposes_inbound_contract_for_host_injected_poller(issuer_hby):
     assert rt.command_topics == ["insurance"]
     # cred_verifier exposed for the host to wire into its injected poller
     assert rt.cred_verifier is not None
-    # capture handler registered on the Habery's exchanger (where a poller feeds)
+    # default: handlers register on the Habery's own exchanger (standalone path)
+    assert rt.exc is issuer_hby.exc
     assert "/insurance/cmd/grant_license" in issuer_hby.exc.routes
     # the runtime no longer manufactures transport — that is the host's job
     assert not hasattr(rt, "mailbox_doer")
+
+
+def test_runtime_registers_handlers_on_host_injected_exchanger(issuer_hby):
+    """A wallet host (e.g. Locksmith) runs its OWN exchanger that its mailbox
+    poller feeds — NOT hby.exc. The runtime must register its capture handlers on
+    that injected exchanger, or inbound exns never reach them."""
+    from keri.peer import exchanging
+
+    hab = issuer_hby.makeHab(name="rating-engine")
+    rgy = credentialing.Regery(hby=issuer_hby, name="rating-engine", temp=True)
+    svc = ServiceAid(alias="rating-engine")
+
+    @svc.command(route="/insurance/cmd/grant_license")
+    def grant(req):
+        return Reply.none()
+
+    host_exc = exchanging.Exchanger(hby=issuer_hby, handlers=[])  # stands in for vault.exc
+    assert host_exc is not issuer_hby.exc
+
+    rt = LocalRuntime(svc, hby=issuer_hby, hab=hab, rgy=rgy, exc=host_exc)
+
+    assert rt.exc is host_exc
+    # handler lands on the injected exchanger, NOT the Habery's default
+    assert "/insurance/cmd/grant_license" in host_exc.routes
+    assert "/insurance/cmd/grant_license" not in issuer_hby.exc.routes
 
 
 class RaisingResolver:
