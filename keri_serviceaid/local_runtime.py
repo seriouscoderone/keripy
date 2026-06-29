@@ -97,12 +97,14 @@ class LocalRuntime:
         """Mailbox topics the host's injected poller must poll to receive this
         Service-AID's command exns.
 
-        A command exn is forwarded under the first segment of its route (the
-        keripy Postman default: ``route.strip("/").split("/")[0]`` — e.g. a
-        ``/insurance/cmd/grant_license`` command arrives under topic
-        ``"insurance"``). The host adds these to whatever standard topics it
-        already polls (``/receipt``, ``/credential``, ...). The runtime exposes
-        them; the host owns the poller (dependency injection)."""
+        keripy's forwarding (``Postman.send``) takes the mailbox topic as an
+        explicit argument — it is NOT derived from the exn ``r`` field by keripy.
+        So this is the CONVENTION a command sender MUST follow: forward under the
+        route's first segment (``route.strip("/").split("/")[0]``) — e.g. ``kli
+        exn send`` defaults the topic that way, so a ``/insurance/cmd/grant_license``
+        command arrives under topic ``"insurance"``. The host adds these to
+        whatever standard topics it already polls (``/receipt``, ``/credential``,
+        ...). The runtime exposes them; the host owns the poller (DI)."""
         return sorted({route.strip("/").split("/")[0]
                        for route in self.svc.routes if route.strip("/")})
 

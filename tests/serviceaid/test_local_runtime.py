@@ -4,7 +4,6 @@ import pytest
 
 from keri.core import scheming
 from keri.kering import Kinds
-from keri.peer import exchanging
 from keri.vdr import credentialing
 
 from keri_serviceaid import (ServiceAid, Reply, LocalRuntime, BoundResolver,
