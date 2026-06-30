@@ -55,9 +55,19 @@ def test_mailbox_method_has_response_streaming():
     )
 
 
-def test_mailbox_owns_no_table():
+def test_mailbox_owns_only_private_registry_table():
+    """MailboxStack imports the core table cross-stack (never owns it) and owns
+    exactly ONE table: the private WebSocket connection registry.  It must NOT
+    own the core DynamoDB table — that is verified by test_mailbox_imports_core_table_lock."""
     t = _synth()
-    t.resource_count_is("AWS::DynamoDB::Table", 0)
+    # One private conn-registry table (added in Phase 3 Task 1).
+    t.resource_count_is("AWS::DynamoDB::Table", 1)
+    # The one table it owns is the connection registry (PK connectionId).
+    t.has_resource_properties("AWS::DynamoDB::Table", {
+        "KeySchema": Match.array_with([
+            Match.object_like({"AttributeName": "connectionId", "KeyType": "HASH"}),
+        ]),
+    })
 
 
 def test_mailbox_leadingkeys_scoped_iam():

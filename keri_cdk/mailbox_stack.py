@@ -33,14 +33,17 @@ from aws_cdk import (
     Duration,
     Aws,
     CfnOutput,
+    RemovalPolicy,
     aws_dynamodb as ddb,
     aws_lambda as _lambda,
     aws_iam as iam,
     aws_apigateway as apigw,
+    aws_apigatewayv2 as apigwv2,
     aws_certificatemanager as acm,
     aws_route53 as r53,
     aws_route53_targets as targets,
 )
+from aws_cdk.aws_apigatewayv2_integrations import WebSocketLambdaIntegration
 from constructs import Construct
 
 from .runtime_layer import KeriRuntimeLayer
@@ -189,6 +192,131 @@ class MailboxStack(Stack):
                 ],
             )
         )
+
+        # --- Connection registry (private DynamoDB table, §5.2) ----------------
+        # NOT the shared core table — this stack owns it exclusively.
+        # PK: connectionId (S); GSI byPre on pre (S); TTL on expireAt.
+        conn_table = ddb.Table(
+            self,
+            "WsConnRegistry",
+            partition_key=ddb.Attribute(name="connectionId", type=ddb.AttributeType.STRING),
+            billing_mode=ddb.BillingMode.PAY_PER_REQUEST,
+            time_to_live_attribute="expireAt",
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+        conn_table.add_global_secondary_index(
+            index_name="byPre",
+            partition_key=ddb.Attribute(name="pre", type=ddb.AttributeType.STRING),
+        )
+
+        # --- WS route Lambdas (plain event-driven, §5.3) -----------------------
+        # These are ordinary Python handlers — no LWA layer, no run.sh, no
+        # response streaming.  The handler strings point at ws_handlers.py which
+        # Task 2 creates; CDK synth zips the asset dir without requiring the
+        # module to exist.
+        _ws_lambda_kwargs = dict(
+            runtime=_lambda.Runtime.PYTHON_3_14,
+            architecture=_lambda.Architecture.ARM_64,
+            code=_lambda.Code.from_asset(_HANDLER_DIR),
+        )
+
+        ws_connect_fn = _lambda.Function(
+            self,
+            "WsConnectFunction",
+            handler="ws_handlers.connect",
+            **_ws_lambda_kwargs,
+        )
+
+        ws_disconnect_fn = _lambda.Function(
+            self,
+            "WsDisconnectFunction",
+            handler="ws_handlers.disconnect",
+            **_ws_lambda_kwargs,
+        )
+        conn_table.grant_write_data(ws_disconnect_fn)
+
+        # subscribe / $default handler: needs full Habery (keri layer + env + IAM).
+        ws_default_fn = _lambda.Function(
+            self,
+            "WsDefaultFunction",
+            handler="ws_handlers.default",
+            layers=[keri_layer],
+            environment={
+                "LD_LIBRARY_PATH": "/opt/lib",
+                "MAILBOX_NAME": name,
+                "MAILBOX_ALIAS": alias,
+                "MAILBOX_BASER_TABLE": core_table.table_name,
+                "MAILBOX_NAMESPACE": f"{Aws.STACK_NAME}:mbx",
+                "MAILBOX_KEEPER_SECRET": resolved_keeper_secret,
+                "MAILBOX_REGION": Aws.REGION,
+                "WS_CONN_TABLE": conn_table.table_name,
+            },
+            **_ws_lambda_kwargs,
+        )
+        # Core-table LeadingKeys-scoped IAM (mirror :154-180).
+        ws_default_fn.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "dynamodb:DescribeTable",
+                    "dynamodb:GetItem",
+                    "dynamodb:PutItem",
+                    "dynamodb:DeleteItem",
+                    "dynamodb:Query",
+                    "dynamodb:BatchWriteItem",
+                ],
+                resources=[
+                    core_table.table_arn,
+                    f"{core_table.table_arn}/index/*",
+                ],
+                conditions={
+                    "ForAllValues:StringLike": {
+                        "dynamodb:LeadingKeys": [
+                            "shared#*",
+                            "__meta__#shared#*",
+                            f"{Aws.STACK_NAME}:*#*",
+                            f"__meta__#{Aws.STACK_NAME}:*",
+                        ]
+                    }
+                },
+            )
+        )
+        # Secrets Manager IAM (mirror :182-191).
+        ws_default_fn.add_to_role_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=_SM_ACTIONS,
+                resources=[
+                    f"arn:{Aws.PARTITION}:secretsmanager:{Aws.REGION}:{Aws.ACCOUNT_ID}:secret:keri/{Aws.STACK_NAME}/*"
+                ],
+            )
+        )
+        conn_table.grant_read_write_data(ws_default_fn)
+
+        # --- WebSocket API + stage (§5.1) ---------------------------------------
+        ws_api = apigwv2.WebSocketApi(
+            self, "MailboxWsApi",
+            route_selection_expression="$request.body.action",
+            connect_route_options=apigwv2.WebSocketRouteOptions(
+                integration=WebSocketLambdaIntegration("WsConnectInt", ws_connect_fn),
+            ),
+            disconnect_route_options=apigwv2.WebSocketRouteOptions(
+                integration=WebSocketLambdaIntegration("WsDisconnectInt", ws_disconnect_fn),
+            ),
+            default_route_options=apigwv2.WebSocketRouteOptions(
+                integration=WebSocketLambdaIntegration("WsDefaultInt", ws_default_fn),
+            ),
+        )
+        ws_stage = apigwv2.WebSocketStage(
+            self, "MailboxWsStage",
+            web_socket_api=ws_api,
+            stage_name="prod",
+            auto_deploy=True,
+        )
+
+        # §5.6: REST deposit handler needs ManageConnections to push nudges.
+        ws_api.grant_manage_connections(self.fn)
+        self.fn.add_environment("WS_CALLBACK_URL", ws_stage.callback_url)
+        self.fn.add_environment("WS_CONN_TABLE", conn_table.table_name)
 
         # --- ACM Certificate (DNS-validated, synth-safe) -----------------------
         hosted_zone = r53.HostedZone.from_hosted_zone_attributes(
