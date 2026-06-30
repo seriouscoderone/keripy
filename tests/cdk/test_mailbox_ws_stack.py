@@ -112,11 +112,28 @@ def test_conn_registry_table_on_demand_billing():
 
 
 def test_manage_connections_iam_grant():
-    """self.fn's role must have execute-api:ManageConnections granted."""
-    import json
-    body = json.dumps(_synth().to_json())
-    assert "execute-api:ManageConnections" in body, (
-        "execute-api:ManageConnections not found in synthesized template; "
+    """self.fn's role policy must include execute-api:ManageConnections.
+
+    Anchored to an actual IAM::Policy resource, not a raw JSON substring.
+    CDK renders a single-action grant as a scalar string (not an array), so
+    we iterate policies and check each statement's Action directly.
+    """
+    t = _synth()
+    policies = t.find_resources("AWS::IAM::Policy")
+    found = False
+    for policy in policies.values():
+        for stmt in policy["Properties"]["PolicyDocument"].get("Statement", []):
+            action = stmt.get("Action", [])
+            # CDK may render a single action as a string instead of a list.
+            if action == "execute-api:ManageConnections" or (
+                isinstance(action, list) and "execute-api:ManageConnections" in action
+            ):
+                found = True
+                break
+        if found:
+            break
+    assert found, (
+        "execute-api:ManageConnections not found in any AWS::IAM::Policy; "
         "ws_api.grant_manage_connections(self.fn) may be missing"
     )
 
@@ -149,3 +166,89 @@ def test_fn_has_ws_conn_table_env():
             break
     assert main_fn is not None, "could not find main LWA mailbox Lambda"
     assert "WS_CONN_TABLE" in main_fn, "WS_CONN_TABLE missing from main mailbox Lambda env"
+
+
+def test_ws_default_fn_has_ws_conn_table_env():
+    """ws_default_fn (subscribe handler) must carry WS_CONN_TABLE in its environment."""
+    t = _synth()
+    fns = t.find_resources("AWS::Lambda::Function")
+    default_fn_env = None
+    for props in fns.values():
+        p = props["Properties"]
+        if p.get("Handler") == "ws_handlers.default":
+            default_fn_env = p.get("Environment", {}).get("Variables", {})
+            break
+    assert default_fn_env is not None, "could not find ws_handlers.default Lambda"
+    assert "WS_CONN_TABLE" in default_fn_env, "WS_CONN_TABLE missing from ws_default_fn env"
+
+
+def test_disconnect_fn_iam_is_delete_only():
+    """$disconnect handler must have only DeleteItem on the registry table — no PutItem.
+
+    §5.6: disconnect = DeleteItem ONLY.  A broad grant_write_data would silently
+    include PutItem/UpdateItem/BatchWriteItem; this assertion catches regressions.
+    CDK may render a single-action statement as a scalar string, so we normalise
+    both forms before comparing.
+    """
+    t = _synth()
+    policies = t.find_resources("AWS::IAM::Policy")
+    delete_only_found = False
+    for policy in policies.values():
+        stmts = policy["Properties"]["PolicyDocument"].get("Statement", [])
+        for stmt in stmts:
+            actions = stmt.get("Action", [])
+            # Normalise scalar → list.
+            if isinstance(actions, str):
+                actions = [actions]
+            if actions == ["dynamodb:DeleteItem"]:
+                delete_only_found = True
+                # Also confirm PutItem is absent (catches partial-overlap grants).
+                assert "dynamodb:PutItem" not in actions, (
+                    "$disconnect policy must not include PutItem"
+                )
+                break
+        if delete_only_found:
+            break
+    assert delete_only_found, (
+        "$disconnect policy with exactly ['dynamodb:DeleteItem'] not found; "
+        "disconnect may be over-permissioned (grant_write_data includes PutItem)"
+    )
+
+
+def test_default_fn_registry_policy_includes_gsi_arn():
+    """ws_default_fn's registry policy must include Query and a /index/* resource.
+
+    §5.6: subscribe = PutItem + Query(GSI).  CDK's grant_read_write_data omits
+    the GSI ARN, so a future broad-grant regression would pass synth but fail at
+    runtime on byPre queries.  This assertion catches that regression.
+    """
+    t = _synth()
+    policies = t.find_resources("AWS::IAM::Policy")
+    gsi_query_found = False
+    for policy in policies.values():
+        stmts = policy["Properties"]["PolicyDocument"].get("Statement", [])
+        for stmt in stmts:
+            actions = stmt.get("Action", [])
+            if isinstance(actions, str):
+                actions = [actions]
+            if "dynamodb:Query" not in actions:
+                continue
+            # Check that at least one resource ends in /index/*
+            resources = stmt.get("Resource", [])
+            if not isinstance(resources, list):
+                resources = [resources]
+            for res in resources:
+                # Resources rendered as Fn::Join dicts in synth; check string
+                # representation for the /index/* suffix marker.
+                res_str = str(res)
+                if "/index/*" in res_str:
+                    gsi_query_found = True
+                    break
+            if gsi_query_found:
+                break
+        if gsi_query_found:
+            break
+    assert gsi_query_found, (
+        "No IAM policy found with dynamodb:Query + a /index/* resource; "
+        "ws_default_fn may be missing the GSI ARN in its registry policy"
+    )

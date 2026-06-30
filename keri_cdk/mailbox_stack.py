@@ -220,6 +220,7 @@ class MailboxStack(Stack):
             code=_lambda.Code.from_asset(_HANDLER_DIR),
         )
 
+        # Lambda defaults (128 MB / 3 s) are intentional for $connect — no Habery needed.
         ws_connect_fn = _lambda.Function(
             self,
             "WsConnectFunction",
@@ -233,7 +234,11 @@ class MailboxStack(Stack):
             handler="ws_handlers.disconnect",
             **_ws_lambda_kwargs,
         )
-        conn_table.grant_write_data(ws_disconnect_fn)
+        # §5.6: $disconnect = DeleteItem ONLY (no PutItem/UpdateItem/BatchWriteItem).
+        ws_disconnect_fn.add_to_role_policy(iam.PolicyStatement(
+            actions=["dynamodb:DeleteItem"],
+            resources=[conn_table.table_arn],
+        ))
 
         # subscribe / $default handler: needs full Habery (keri layer + env + IAM).
         ws_default_fn = _lambda.Function(
@@ -290,7 +295,13 @@ class MailboxStack(Stack):
                 ],
             )
         )
-        conn_table.grant_read_write_data(ws_default_fn)
+        # §5.6: subscribe = PutItem + Query(GSI). CDK grant helpers omit the GSI
+        # index ARN, so a Query on byPre would AccessDenied at runtime; use an
+        # explicit policy with the index ARN so the grant is synth-verified.
+        ws_default_fn.add_to_role_policy(iam.PolicyStatement(
+            actions=["dynamodb:PutItem", "dynamodb:Query"],
+            resources=[conn_table.table_arn, f"{conn_table.table_arn}/index/*"],
+        ))
 
         # --- WebSocket API + stage (§5.1) ---------------------------------------
         ws_api = apigwv2.WebSocketApi(
