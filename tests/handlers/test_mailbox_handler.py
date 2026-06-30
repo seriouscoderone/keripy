@@ -261,10 +261,8 @@ def test_ingest_deposit_returns_204():
 def test_ingest_mbx_qry_returns_sse_streamed():
     """A qry r=/mbx returns 200 + Content-Type: text/event-stream (streaming path).
 
-    Falcon TestClient drains async generator streams into result.text, so the
-    assertion works identically whether resp.stream or resp.text was used.
+    Falcon TestClient drains the async generator into result.text.
     """
-    import asyncio as _asyncio_inner
     from mailbox_handler import build_app
     fake_serder = MagicMock()
     fake_serder.ked = {
@@ -273,7 +271,7 @@ def test_ingest_mbx_qry_returns_sse_streamed():
     }
     sse_chunk = b"id: 0\nevent: receipt\nretry: 1000\ndata: msg\n\n"
 
-    async def fake_stream(pre, topics, **kwargs):
+    async def fake_stream(pre, topics):
         yield sse_chunk
 
     with patch("mailbox_handler._hby") as mock_hby, \
@@ -287,6 +285,37 @@ def test_ingest_mbx_qry_returns_sse_streamed():
     assert result.status_code == 200
     assert result.headers.get("Content-Type") == "text/event-stream"
     assert "data: msg" in result.text
+
+
+def test_ingest_mbx_qry_canonical_i_key_drains_correctly():
+    """qry r=/mbx carrying only q['i'] (canonical keripy habbing.py:1565) returns
+    200 + event-stream with messages — proves Change B fixes canonical clients.
+
+    Before the fix (q.get('pre') only), q['i'] without q['pre'] → 400.
+    """
+    from mailbox_handler import build_app
+    fake_serder = MagicMock()
+    fake_serder.ked = {
+        "t": "qry", "r": "/mbx",
+        "q": {"i": "BCanonical", "topics": {"receipt": 0}}  # canonical key, no "pre"
+    }
+    sse_chunk = b"id: 0\nevent: receipt\nretry: 1000\ndata: canon-msg\n\n"
+
+    async def fake_stream(pre, topics):
+        assert pre == "BCanonical", f"expected BCanonical, got {pre!r}"
+        yield sse_chunk
+
+    with patch("mailbox_handler._hby") as mock_hby, \
+         patch("mailbox_handler._detect_mbx_query", return_value=fake_serder), \
+         patch("mailbox_handler._stream_mbx_response", side_effect=fake_stream):
+        mock_hby.psr.parse = MagicMock()
+        mock_hby.kvy.processEscrows = MagicMock()
+        client = testing.TestClient(build_app())
+        result = client.simulate_post("/", body=b"FAKE_CESR",
+                                     headers={"Content-Type": "application/cesr"})
+    assert result.status_code == 200
+    assert result.headers.get("Content-Type") == "text/event-stream"
+    assert "data: canon-msg" in result.text
 
 
 def test_ingest_mbx_qry_missing_pre_returns_400():
@@ -318,29 +347,22 @@ def test_put_root_also_ingests():
 
 
 # ---------------------------------------------------------------------------
-# Task 2.7: _stream_mbx_response async generator (SSE long-poll)
+# Task 3: _stream_mbx_response async generator (drain-only, replaces long-poll)
 # ---------------------------------------------------------------------------
 
-import asyncio as _asyncio_for_tests
+import asyncio as _asyncio_for_tests  # noqa: F401 — kept for pytest-asyncio compat
 
 
 @pytest.mark.asyncio
 async def test_stream_mbx_response_yields_initial_drain():
-    """Initial drain yields one SSE frame per queued message."""
+    """Drain yields SSE frames for all queued messages then completes."""
     from mailbox_handler import _stream_mbx_response
     with patch("mailbox_handler._hby") as mock_hby:
-        # First poll returns 2 messages, subsequent polls return empty
-        mock_hby.db.cloneTopicIter = MagicMock(side_effect=[
-            iter([(0, b"BRecipient/receipt", b"msg-one"),
-                  (1, b"BRecipient/receipt", b"msg-two")]),
-            iter([]),  # second poll
-            iter([]),  # third poll
-            iter([]),  # fourth poll
-        ])
-        # Short soft_cap to bound the loop
-        gen = _stream_mbx_response("BRecipient", {"receipt": 0},
-                                   soft_cap_s=0.3, poll_interval_s=0.05,
-                                   keepalive_interval_s=60)
+        mock_hby.db.cloneTopicIter = MagicMock(return_value=iter([
+            (0, b"BRecipient/receipt", b"msg-one"),
+            (1, b"BRecipient/receipt", b"msg-two"),
+        ]))
+        gen = _stream_mbx_response("BRecipient", {"receipt": 0})
         frames = []
         async for frame in gen:
             frames.append(frame)
@@ -352,48 +374,50 @@ async def test_stream_mbx_response_yields_initial_drain():
 
 
 @pytest.mark.asyncio
-async def test_stream_mbx_response_emits_keepalive_when_idle():
-    """When no new messages, emits :keepalive after keepalive_interval_s."""
+async def test_stream_mbx_response_drain_only_no_keepalive():
+    """Drain-only generator emits NO :keepalive frame and completes after one pass."""
     from mailbox_handler import _stream_mbx_response
     with patch("mailbox_handler._hby") as mock_hby:
         mock_hby.db.cloneTopicIter = MagicMock(return_value=iter([]))
-        gen = _stream_mbx_response("BRecipient", {"receipt": 0},
-                                   soft_cap_s=0.25, poll_interval_s=0.02,
-                                   keepalive_interval_s=0.1)
+        gen = _stream_mbx_response("BRecipient", {"receipt": 0})
         frames = []
         async for frame in gen:
             frames.append(frame)
-    assert any(f == b":keepalive\n\n" for f in frames), \
-        f"expected a :keepalive frame, got: {frames}"
+    assert not any(b":keepalive" in f for f in frames), \
+        f"drain-only must not emit keepalive frames, got: {frames}"
+    # Generator must complete (StopAsyncIteration) rather than hold open
+    with pytest.raises(StopAsyncIteration):
+        await gen.__anext__()
 
 
 @pytest.mark.asyncio
-async def test_stream_mbx_response_advances_cursor_across_polls():
-    """If new messages arrive on a later poll, they get yielded with correct ids."""
-    from mailbox_handler import _stream_mbx_response
+async def test_stream_mbx_response_drain_terminates_no_repolling():
+    """Drain-only generator returns backlog then stops — does NOT re-poll.
 
-    # Simulate: first poll drains nothing, second poll yields one new message
-    call_count = {"n": 0}
-    def fake_iter(topic, fn):
-        call_count["n"] += 1
-        if call_count["n"] == 1:
-            return iter([])
-        elif call_count["n"] == 2:
-            return iter([(5, topic, b"late-arrival")])
-        else:
-            return iter([])
+    TDD: this would hang/keepalive under the old held-open generator.
+    Under drain-only it must complete (StopAsyncIteration) immediately.
+    """
+    from mailbox_handler import _stream_mbx_response
+    poll_count = {"n": 0}
+
+    def counting_iter(topic, fn):
+        poll_count["n"] += 1
+        if poll_count["n"] == 1:
+            return iter([(3, topic, b"backlog-msg")])
+        # A second poll would mean the old behavior leaked through
+        return iter([(99, topic, b"should-not-appear")])
 
     with patch("mailbox_handler._hby") as mock_hby:
-        mock_hby.db.cloneTopicIter = fake_iter
-        gen = _stream_mbx_response("BRecipient", {"receipt": 0},
-                                   soft_cap_s=0.3, poll_interval_s=0.05,
-                                   keepalive_interval_s=60)
+        mock_hby.db.cloneTopicIter = counting_iter
+        gen = _stream_mbx_response("BRecipient", {"receipt": 0})
         frames = []
         async for frame in gen:
             frames.append(frame)
+
     body = b"".join(frames)
-    assert b"data: late-arrival" in body
-    assert b"id: 5" in body
+    assert b"data: backlog-msg" in body
+    assert b"should-not-appear" not in body, "drain-only must not re-poll"
+    assert poll_count["n"] == 1, f"cloneTopicIter polled {poll_count['n']} times; expected 1"
 
 
 # ---------------------------------------------------------------------------

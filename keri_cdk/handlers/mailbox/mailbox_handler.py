@@ -6,7 +6,6 @@ warm invocations reuse them. build_app() wires Falcon routes to Resource
 classes and returns the ASGI App that bootstrap.py boots with uvicorn.
 """
 
-import asyncio
 import base64
 import json
 import logging
@@ -383,56 +382,23 @@ def _detect_mbx_query(ims):
     return None
 
 
-async def _stream_mbx_response(pre, topics, soft_cap_s=780.0, poll_interval_s=1.0,
-                               keepalive_interval_s=240.0):
-    """Async generator yielding SSE-framed bytes for an mbx long-poll.
+async def _stream_mbx_response(pre, topics):
+    """Async generator yielding SSE-framed bytes for a one-shot mbx drain.
 
-    Yields the initial drain immediately, then polls cloneTopicIter every
-    poll_interval_s for new messages until soft_cap_s elapses. Emits a
-    `:keepalive\\n\\n` comment frame every keepalive_interval_s of silence.
+    Yields the backlog once via _format_sse_events and terminates — no
+    keepalive frames, no re-poll, no soft-cap hold.  LWA response-streaming
+    handles large drains without buffering the full body in memory (§9.2).
 
     Args:
         pre (str | bytes): recipient AID
-        topics (dict): {topic_name: last_seen_ordinal}; copied internally so
-            the caller's dict is not mutated
-        soft_cap_s (float): max total streaming duration in seconds
-        poll_interval_s (float): how often to poll for new messages
-        keepalive_interval_s (float): how often to emit `:keepalive` when idle
+        topics (dict): {topic_name: last_seen_ordinal}
 
     Yields:
-        bytes: SSE-framed chunks (data frame or keepalive comment)
+        bytes: SSE-framed backlog (one chunk); nothing if backlog is empty.
     """
-    deadline = time.monotonic() + soft_cap_s
-    last_event_ts = time.monotonic()
-    pre_str = pre.decode("utf-8") if isinstance(pre, (bytes, bytearray)) else pre
-    cursors = dict(topics)
-
-    try:
-        while time.monotonic() < deadline:
-            produced = False
-            for name, last_on in list(cursors.items()):
-                topic_key = f"{pre_str}/{name}".encode("utf-8")
-                try:
-                    for on, _topic, msg in _hby.db.cloneTopicIter(topic=topic_key,
-                                                                  fn=int(last_on) + 1):
-                        msg_text = bytes(msg).decode("utf-8")
-                        yield (f"id: {on}\nevent: {name}\nretry: 1000\n"
-                               f"data: {msg_text}\n\n").encode("utf-8")
-                        cursors[name] = on
-                        produced = True
-                except Exception as exc:
-                    logger.warning("cloneTopicIter failed for pre=%s topic=%s: %s",
-                                   pre, name, exc, exc_info=True)
-            now = time.monotonic()
-            if produced:
-                last_event_ts = now
-            elif now - last_event_ts >= keepalive_interval_s:
-                yield b":keepalive\n\n"
-                last_event_ts = now
-            await asyncio.sleep(poll_interval_s)
-    except asyncio.CancelledError:
-        logger.debug("mbx stream cancelled for pre=%s (client disconnect)", pre_str)
-        raise
+    body = _format_sse_events(_hby, pre, topics)
+    if body:
+        yield body.encode("utf-8")
 
 
 class OOBIResource:
@@ -562,7 +528,7 @@ class RootResource:
 
         if mbx_serder is not None:
             q = mbx_serder.ked.get("q") or {}
-            pre = q.get("pre")
+            pre = q.get("i") or q.get("pre")  # "i" is canonical (habbing.py:1565); "pre" for back-compat
             topics = q.get("topics") or {}
             if not isinstance(pre, str) or not pre or not isinstance(topics, dict):
                 resp.media = {"error": "qry/mbx requires q.pre (str) and q.topics (dict)"}
