@@ -6,6 +6,12 @@ Follows the same patterns as test_mailbox_handler.py:
 - autouse mock_init fixture to skip the heavy cold-start init()
 
 TDD order: tests written first (RED), then ws_handlers.py (GREEN).
+
+Native-parity contract (§5.3 DECISION REVISION 2026-06-30):
+  Subscribe gate = "pre in kevers" only — mirrors keripy Kevery.processQuery.
+  No signature verification, no signer↔owner binding.  A qry for a KNOWN AID
+  signed by a DIFFERENT key MUST be accepted (see
+  test_subscribe_known_aid_different_signer_is_accepted below).
 """
 
 import json
@@ -206,9 +212,7 @@ def test_subscribe_valid_signed_qry_writes_registry_row(monkeypatch):
 def test_subscribe_unknown_aid_does_not_write_row(monkeypatch):
     """subscribe: a qry signed by an AID NOT in _hby.kevers → no row, error.
 
-    This is the security gate test.  The signer's AID is absent from the
-    server Habery's kevers, so both the kever membership check and the
-    verifySigs call must reject the subscribe.
+    Native-parity gate: "pre not in kevers" is the only rejection criterion.
     """
     monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
 
@@ -255,9 +259,76 @@ def test_subscribe_unknown_aid_does_not_write_row(monkeypatch):
         f"Expected 4xx for unknown AID, got {result['statusCode']}"
     )
     item = table.get_item(Key={"connectionId": conn_id}).get("Item")
-    assert item is None, "No registry row must be written for unknown/unverifiable AID"
+    assert item is None, "No registry row must be written for unknown AID"
 
     unknown_hby.close()
+    server_hby.close()
+
+
+@mock_aws
+def test_subscribe_known_aid_different_signer_is_accepted(monkeypatch):
+    """subscribe: a qry for a KNOWN recipient AID, signed by a DIFFERENT key, MUST be accepted.
+
+    This test explicitly locks in the §5.3 DECISION REVISION (2026-06-30):
+    native parity means NO signer↔owner binding.  keripy's Kevery.processQuery
+    accepts any structurally valid /mbx qry whose q["i"] is in kevers — it does
+    not check that the signer == recipient.  The serverless WS subscribe applies
+    that SAME check and nothing more.
+
+    A future change that re-adds a signature or signer-binding gate WILL break
+    this test, making the regression visible.
+    """
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+
+    # Two AIDs in the server's kevers: recipient (alice) and a different signer (bob).
+    server_hby = Habery(name="diff-signer-test", temp=True, salt=Salter().qb64)
+    alice = server_hby.makeHab(name="alice", transferable=True)  # recipient
+    bob = server_hby.makeHab(name="bob", transferable=True)      # signer ≠ recipient
+
+    recipient_pre = alice.pre
+    topics = {"receipt": 0}
+
+    # bob signs a qry addressed to alice's mailbox (bob.pre != alice.pre)
+    qry_bytes = _make_signed_mbx_qry(bob, recipient_pre, topics)
+    import base64
+    qry_qb64 = base64.b64encode(qry_bytes).decode()
+
+    ddb = boto3.resource("dynamodb", region_name="us-east-1")
+    table = ddb.create_table(
+        TableName=WS_CONN_TABLE,
+        KeySchema=[{"AttributeName": "connectionId", "KeyType": "HASH"}],
+        AttributeDefinitions=[
+            {"AttributeName": "connectionId", "AttributeType": "S"},
+            {"AttributeName": "pre", "AttributeType": "S"},
+        ],
+        GlobalSecondaryIndexes=[{
+            "IndexName": "byPre",
+            "KeySchema": [{"AttributeName": "pre", "KeyType": "HASH"}],
+            "Projection": {"ProjectionType": "ALL"},
+        }],
+        BillingMode="PAY_PER_REQUEST",
+    )
+    table.wait_until_exists()
+
+    conn_id = "conn-diff-signer-005"
+    body = json.dumps({"action": "subscribe", "qry": qry_qb64})
+    event = _make_ws_event(conn_id, body=body)
+
+    with patch("mailbox_handler._hby", server_hby), \
+         patch("mailbox_handler._initialized", True), \
+         patch("mailbox_handler.init", lambda: None):
+        from ws_handlers import default
+        result = default(event, {})
+
+    # MUST be accepted — native parity does not bind signer to recipient
+    assert result["statusCode"] == 200, (
+        f"Native parity: a qry for a KNOWN AID signed by a different key MUST be "
+        f"accepted (mirrors keripy Kevery.processQuery). Got {result}"
+    )
+    item = table.get_item(Key={"connectionId": conn_id}).get("Item")
+    assert item is not None, "Registry row must be written (native parity: no signer binding)"
+    assert item["pre"] == recipient_pre
+
     server_hby.close()
 
 
