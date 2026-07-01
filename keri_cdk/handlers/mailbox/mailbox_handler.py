@@ -350,13 +350,23 @@ def _format_sse_events(hby, pre, topics):
     Returns:
         str: SSE-framed body. Empty string when no new messages on any topic.
 
-    Topic key construction mirrors keri/app/forwarding.py:500 exactly:
-        f"{recipient}/{topic}".encode("utf-8").
+    Topic key construction mirrors keri/app/indirecting.py MailboxIterable.__next__
+    exactly: ``key = self.pre + topic`` (simple concatenation, no inserted slash).
+
+    The stored key form is ``{pre}/{bare_topic}`` (written by forwarding.py which
+    stores f"{recp}/{topic}" with a BARE topic modifier, e.g. "credential").
+    Queries use SLASH-PREFIXED topics (e.g. "/credential") per keripy convention
+    (indirecting.py:1034 reads ``self.pre + topic`` → "Ebob" + "/credential" =
+    "Ebob/credential").  Concatenating without an inserted separator makes both
+    deposit (bare) and query (slash-prefixed) resolve to the same stored key.
+    Inserting "/" here would double-slash slash-prefixed query topics ("Ebob//credential")
+    and never match the stored key.
     """
     out = []
     pre_str = pre.decode("utf-8") if isinstance(pre, (bytes, bytearray)) else pre
     for name, last_on in topics.items():
-        topic_key = f"{pre_str}/{name}".encode("utf-8")
+        # Mirror MailboxIterable.__next__ (indirecting.py): key = self.pre + topic
+        topic_key = f"{pre_str}{name}".encode("utf-8")
         try:
             for on, _topic, msg in hby.db.cloneTopicIter(topic=topic_key,
                                                         fn=int(last_on) + 1):
@@ -394,6 +404,10 @@ def _detect_fwd(ims):
     Mirrors _detect_mbx_query: construct a SerderKERI to peek the type and
     route fields without consuming the bytearray.  Returns None on parse
     error so the caller treats unknown messages as plain deposits.
+
+    Note: caller extracts and validates the ``q`` fields (pre, topic) from
+    the returned serder.  The ``q["topic"]`` value is the BARE /fwd modifier
+    (e.g. "credential", NOT "/credential") per keripy forwarding.py convention.
     """
     from keri.core import serdering
     try:
@@ -449,6 +463,10 @@ def _notify_subscribers(pre, topic):
         if not connection_ids:
             return
 
+        # The nudge topic is the BARE /fwd modifier from the deposit (e.g.
+        # "credential").  It is advisory only — the client re-drains ALL its
+        # subscribed slash-prefixed topics on any nudge (see keri-serverless-mailbox
+        # package MailboxClient).  Never put CESR in a nudge (128 KB WS frame cap).
         nudge = json.dumps({"type": "mailbox.nudge", "pre": pre, "topic": topic})
         nudge_bytes = nudge.encode("utf-8")
 
@@ -634,7 +652,7 @@ class RootResource:
             pre = q.get("i") or q.get("pre")  # "i" is canonical (habbing.py:1565); "pre" for back-compat
             topics = q.get("topics") or {}
             if not isinstance(pre, str) or not pre or not isinstance(topics, dict):
-                resp.media = {"error": "qry/mbx requires q.pre (str) and q.topics (dict)"}
+                resp.media = {"error": "qry/mbx requires q['i'] or q['pre'] (str) and q.topics (dict)"}
                 resp.status = falcon.HTTP_400
                 return
             resp.content_type = "text/event-stream"

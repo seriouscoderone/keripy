@@ -366,18 +366,23 @@ def test_ws_subscribe_then_deposit_nudge_drain(fresh_hby, mailbox_pre, mailbox_w
         target_pre=mailbox_pre,
     )
     try:
-        # (b) Deposit — Alice forwards a small inner message to Bob's /credential topic
+        # (b) Deposit — Alice forwards a small inner message to Bob's credential topic.
+        # BARE topic modifier ("credential") — canonical keripy sender form per
+        # forwarding.py:273/291/308; stored key = "{pre}/credential".
+        # Queries use slash-prefixed topics ("/credential") which concatenate with
+        # pre to resolve the same stored key (MailboxIterable: pre + topic).
         embedded = bob.msgOwnEvent(sn=0)  # any opaque CESR bytes will do
         fwd_ims = _make_fwd_message(
             sender_hab=alice,
             recipient_pre=bob.pre,
-            topic="/credential",
+            topic="credential",   # BARE — canonical /fwd modifier form
             embedded_msg=embedded,
         )
         s_fwd, _, _ = http_post_cesr("/", fwd_ims)
         assert s_fwd == 204, f"fwd POST: {s_fwd}"
 
-        # (c) Nudge — wait for mailbox.nudge frame on the WS
+        # (c) Nudge — wait for mailbox.nudge frame on the WS.
+        # nudge.topic reflects the BARE deposit modifier ("credential").
         deadline = time.monotonic() + NUDGE_TIMEOUT
         nudge_frame = None
         while time.monotonic() < deadline:
@@ -394,8 +399,8 @@ def test_ws_subscribe_then_deposit_nudge_drain(fresh_hby, mailbox_pre, mailbox_w
             "no mailbox.nudge frame received within timeout"
         assert nudge_frame.get("pre") == bob.pre, \
             f"nudge.pre mismatch: {nudge_frame!r}"
-        assert nudge_frame.get("topic") == "/credential", \
-            f"nudge.topic mismatch: {nudge_frame!r}"
+        assert nudge_frame.get("topic") == "credential", \
+            f"nudge.topic mismatch (expected bare 'credential'): {nudge_frame!r}"
     finally:
         conn.close()
 

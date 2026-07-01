@@ -161,7 +161,14 @@ def test_format_sse_events_emits_sse_frame_per_message():
 
 
 def test_format_sse_events_topic_key_construction():
-    """Topic key is f'{pre}/{name}'.encode() — matches forwarding.py:500."""
+    """Drain key = pre + topic (simple concatenation, mirrors MailboxIterable).
+
+    Deposits use BARE topic modifiers ("credential"); queries use SLASH-PREFIXED
+    topics ("/credential").  The stored key is "{pre}/{bare_topic}" — written by
+    forwarding.py as f"{recp}/{topic}" where topic is bare.  A slash-prefixed
+    query topic concatenated with pre ("BAlice" + "/credential") resolves to the
+    SAME stored key "BAlice/credential" without inserting a separator.
+    """
     from mailbox_handler import _format_sse_events
     hby = MagicMock()
     captured = {}
@@ -170,9 +177,85 @@ def test_format_sse_events_topic_key_construction():
         captured["fn"] = fn
         return iter([])
     hby.db.cloneTopicIter = fake_iter
-    _format_sse_events(hby, "BAlice", {"credential": 5})
+    # Canonical query form: slash-prefixed topic ("/credential")
+    _format_sse_events(hby, "BAlice", {"/credential": 5})
+    # pre + slash-topic = "BAlice" + "/credential" = "BAlice/credential" (same stored key)
     assert captured["topic"] == b"BAlice/credential"
     assert captured["fn"] == 6  # last_on + 1
+
+
+def test_format_sse_events_round_trip_pin():
+    """End-to-end key round-trip: stored key "{pre}/credential" is found by
+    a slash-prefixed query topic "/credential" (canonical query form).
+
+    This test asserts the fix for the double-slash bug: before the fix,
+    f"{pre}/{name}" with name="/credential" produced "BAlice//credential"
+    (double slash), which NEVER matched the stored key "BAlice/credential".
+    After the fix (pre + topic concatenation), "BAlice" + "/credential" =
+    "BAlice/credential" — byte-identical to the stored key.
+
+    RED against the pre-fix f"{pre_str}/{name}" construction:
+        stored="BAlice/credential", built="BAlice//credential" → no match → 0 messages.
+    GREEN after the fix (pre + topic):
+        stored="BAlice/credential", built="BAlice/credential" → match → message returned.
+    """
+    from mailbox_handler import _format_sse_events
+
+    pre = "BAlice"
+    bare_topic = "credential"
+    stored_key = f"{pre}/{bare_topic}".encode("utf-8")  # "BAlice/credential"
+
+    hby = MagicMock()
+
+    def key_checking_iter(topic, fn):
+        # Only return a message when the built key matches the stored key exactly.
+        # This would be empty under the OLD f"{pre}/{name}" with slash-prefixed name
+        # because "BAlice" + "/" + "/credential" = "BAlice//credential" ≠ stored key.
+        if topic == stored_key:
+            return iter([(0, stored_key, b"round-trip-msg")])
+        return iter([])
+
+    hby.db.cloneTopicIter = key_checking_iter
+
+    # Query uses SLASH-PREFIXED topic — the canonical keripy query form
+    out = _format_sse_events(hby, pre, {"/credential": -1})
+
+    # After the fix: pre + "/credential" = "BAlice/credential" → matches stored key → message returned
+    assert "round-trip-msg" in out, (
+        f"Round-trip failed: slash-prefixed query topic '/credential' should resolve "
+        f"to stored key {stored_key!r} but got no messages. "
+        f"This indicates the double-slash bug is present."
+    )
+    assert "id: 0" in out
+
+
+def test_format_sse_events_no_double_slash_with_slash_prefixed_topic():
+    """A slash-prefixed query topic must NOT produce a double-slash key.
+
+    Under the old f"{pre_str}/{name}" construction, "/credential" as the topic
+    name would produce "BAlice//credential" — asserting it is empty here
+    confirms the bug is fixed: the key passed to cloneTopicIter must be
+    "BAlice/credential", not "BAlice//credential".
+    """
+    from mailbox_handler import _format_sse_events
+
+    hby = MagicMock()
+    captured_keys = []
+
+    def capturing_iter(topic, fn):
+        captured_keys.append(topic)
+        return iter([])
+
+    hby.db.cloneTopicIter = capturing_iter
+    _format_sse_events(hby, "BAlice", {"/credential": 0})
+
+    assert len(captured_keys) == 1
+    key = captured_keys[0]
+    assert key == b"BAlice/credential", (
+        f"Expected b'BAlice/credential', got {key!r}. "
+        f"A double slash (b'BAlice//credential') indicates the pre-fix bug."
+    )
+    assert b"//" not in key, f"Double slash detected in topic key: {key!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -355,14 +438,20 @@ import asyncio as _asyncio_for_tests  # noqa: F401 — kept for pytest-asyncio c
 
 @pytest.mark.asyncio
 async def test_stream_mbx_response_yields_initial_drain():
-    """Drain yields SSE frames for all queued messages then completes."""
+    """Drain yields SSE frames for all queued messages then completes.
+
+    Uses slash-prefixed query topics ("/receipt") — the canonical keripy form.
+    The built key is pre + "/receipt" = "BRecipient/receipt" which matches
+    the stored key written by a bare-topic deposit ("receipt").
+    """
     from mailbox_handler import _stream_mbx_response
     with patch("mailbox_handler._hby") as mock_hby:
         mock_hby.db.cloneTopicIter = MagicMock(return_value=iter([
             (0, b"BRecipient/receipt", b"msg-one"),
             (1, b"BRecipient/receipt", b"msg-two"),
         ]))
-        gen = _stream_mbx_response("BRecipient", {"receipt": 0})
+        # Canonical: slash-prefixed query topics
+        gen = _stream_mbx_response("BRecipient", {"/receipt": 0})
         frames = []
         async for frame in gen:
             frames.append(frame)
@@ -379,7 +468,8 @@ async def test_stream_mbx_response_drain_only_no_keepalive():
     from mailbox_handler import _stream_mbx_response
     with patch("mailbox_handler._hby") as mock_hby:
         mock_hby.db.cloneTopicIter = MagicMock(return_value=iter([]))
-        gen = _stream_mbx_response("BRecipient", {"receipt": 0})
+        # Canonical: slash-prefixed query topic
+        gen = _stream_mbx_response("BRecipient", {"/receipt": 0})
         frames = []
         async for frame in gen:
             frames.append(frame)
@@ -396,6 +486,7 @@ async def test_stream_mbx_response_drain_terminates_no_repolling():
 
     TDD: this would hang/keepalive under the old held-open generator.
     Under drain-only it must complete (StopAsyncIteration) immediately.
+    Uses slash-prefixed query topic ("/receipt") — canonical keripy form.
     """
     from mailbox_handler import _stream_mbx_response
     poll_count = {"n": 0}
@@ -409,7 +500,8 @@ async def test_stream_mbx_response_drain_terminates_no_repolling():
 
     with patch("mailbox_handler._hby") as mock_hby:
         mock_hby.db.cloneTopicIter = counting_iter
-        gen = _stream_mbx_response("BRecipient", {"receipt": 0})
+        # Canonical: slash-prefixed query topic
+        gen = _stream_mbx_response("BRecipient", {"/receipt": 0})
         frames = []
         async for frame in gen:
             frames.append(frame)
