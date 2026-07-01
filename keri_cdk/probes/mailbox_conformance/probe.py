@@ -2,27 +2,42 @@
 
 Exercises the deployed Lambda mailbox as a third-party KERI controller would.
 Default target is ``https://mailbox.keri.host``; override via ``MAILBOX_URL``
-environment variable (e.g. ``http://localhost:3000`` for ``sam local``).
+environment variable (e.g. ``https://dev.mailbox.keri.host`` for a dev stage).
 
 Each test uses a fresh in-memory ``Habery`` so tests are order-independent
 and can run in CI.
 
+These tests target the **serverless notify-and-fetch** flow introduced in
+Phase 3 (§5.3 / §5.5 / §5.7):
+
+  1. Subscribe — open a WebSocket and send a signed ``action=subscribe`` envelope.
+  2. Deposit  — POST ``/fwd`` over REST to deliver a message.
+  3. Nudge    — assert a ``mailbox.nudge`` frame arrives on the WS.
+  4. Drain    — POST a signed ``qry r=/mbx``; assert the response delivers the
+                backlog and **closes** (drain-then-EOF), NOT a long-poll stream.
+
 Run with::
 
-    pytest keri_cdk/probes/mailbox_conformance/probe.py -v
+    MAILBOX_URL=https://dev.mailbox.keri.host pytest keri_cdk/probes/mailbox_conformance/probe.py -v
+    # point at a local SAM / moto dev stack:
     MAILBOX_URL=http://localhost:3000 pytest keri_cdk/probes/mailbox_conformance/probe.py -v
+
+The default target ``https://mailbox.keri.host`` is the **production** mailbox.
+Do NOT run the deposit/nudge/drain tests against production without explicit
+approval; only run the status/oobi/400-path tests against it.
+Task 8 runs the full suite against a dev stage.
 """
 
+import base64
 import json
 import os
-import socket
 import tempfile
-import threading
 import time
 import urllib.request
 import urllib.error
 
 import pytest
+import websockets.sync.client
 
 os.environ.setdefault("HOME", tempfile.mkdtemp(prefix="mailbox-live-test-"))
 
@@ -32,6 +47,7 @@ from keri.core.signing import Salter       # noqa: E402
 
 MAILBOX_URL = os.environ.get("MAILBOX_URL", "https://mailbox.keri.host").rstrip("/")
 TIMEOUT = 30  # seconds per HTTP call
+NUDGE_TIMEOUT = 15  # seconds to wait for a WS nudge frame
 
 
 # ---------------------------------------------------------------------------
@@ -46,6 +62,17 @@ def mailbox_pre():
     pre = body["mailbox"]
     assert pre.startswith("B"), f"mailbox AID is not non-trans: {pre!r}"
     return pre
+
+
+@pytest.fixture(scope="module")
+def mailbox_ws_url():
+    """Discover the ``wss://`` URL from the status endpoint ``ws`` field."""
+    with urllib.request.urlopen(f"{MAILBOX_URL}/", timeout=TIMEOUT) as r:
+        body = json.loads(r.read())
+    ws = body.get("ws", "")
+    assert ws.startswith("wss://") or ws.startswith("ws://"), \
+        f"status JSON missing valid ws field: {body!r}"
+    return ws
 
 
 @pytest.fixture
@@ -97,7 +124,7 @@ def http_post_cesr(path, body, read_response=True):
             return r.status, CaseInsensitiveHeaders(r.headers), r.read()
         finally:
             r.close()
-    return r  # caller owns lifecycle (used by streaming reader)
+    return r  # caller owns lifecycle
 
 
 def _make_fwd_message(sender_hab, recipient_pre, topic, embedded_msg):
@@ -109,7 +136,7 @@ def _make_fwd_message(sender_hab, recipient_pre, topic, embedded_msg):
                  embeds={"msg": inner_bytes})
       - hab.endorse(serder) signs the exn with the sender's keys.
     """
-    from keri.peer.exchanging import exchange
+    from keri.core.eventing import exchange
     fwd_serder, fwd_end = exchange(
         route="/fwd",
         sender=sender_hab.pre,
@@ -123,7 +150,7 @@ def _make_fwd_message(sender_hab, recipient_pre, topic, embedded_msg):
 
 
 def _make_mbx_query(querier_hab, recipient_pre, topics, target_pre):
-    """Build a signed `qry r=/mbx` message ready to POST to the mailbox.
+    """Build a signed ``qry r=/mbx`` message ready to POST to the mailbox.
 
     Mirrors keri.app.indirecting.Poller construction:
         q = dict(pre=self.pre, topics=topics)
@@ -138,52 +165,49 @@ def _make_mbx_query(querier_hab, recipient_pre, topics, target_pre):
     ))
 
 
-def _read_sse_until(qry_ims, expected_substr, max_seconds=12):
-    """POST `qry_ims` and read the streaming SSE body until `expected_substr`
-    appears in the accumulated body, OR `max_seconds` elapse.
+def _drain_mbx_response(qry_ims, max_seconds=12):
+    """POST ``qry_ims`` and read the response to completion (drain-then-EOF).
 
-    Returns (status, headers, body_text). Streaming reads use short socket
-    timeouts so we don't get stuck on a long-poll keepalive window.
+    For the serverless one-shot fetch, the mailbox returns the backlog and
+    then **closes** the connection — no long-poll keepalive.  This helper
+    reads until EOF within ``max_seconds``, then returns the accumulated body.
+
+    Returns (status, headers, body_bytes).
     """
     req = urllib.request.Request(
         f"{MAILBOX_URL}/", data=bytes(qry_ims),
         headers={"Content-Type": "application/cesr"}, method="POST",
     )
-    r = urllib.request.urlopen(req, timeout=max_seconds)
-    status = r.status
-    headers = CaseInsensitiveHeaders(r.headers)
-    try:
-        # Per-read socket timeout (separate from the open timeout)
-        r.fp.raw._sock.settimeout(2.0)
-    except Exception:
-        pass
-    buf = bytearray()
-    deadline = time.monotonic() + max_seconds
-    try:
-        while time.monotonic() < deadline:
-            try:
-                chunk = r.read(512)
-            except socket.timeout:
-                continue
-            if not chunk:
-                break
-            buf.extend(chunk)
-            if expected_substr.encode("utf-8") in buf:
-                break
-    finally:
-        try:
-            r.close()
-        except Exception:
-            pass
-    return status, headers, buf.decode("utf-8", errors="replace")
+    with urllib.request.urlopen(req, timeout=max_seconds) as r:
+        status = r.status
+        headers = CaseInsensitiveHeaders(r.headers)
+        body = r.read()
+    return status, headers, body
+
+
+def _ws_subscribe(ws_url, querier_hab, recipient_pre, topics, target_pre):
+    """Open a sync WS to ``ws_url``, send an ``action=subscribe`` envelope,
+    and return the live ``websockets.sync.client.Connection`` object.
+
+    The envelope carries a base64-encoded signed ``qry r=/mbx`` so the
+    server can verify the subscriber owns (or queries on behalf of) ``recipient_pre``.
+
+    Caller is responsible for closing the connection.
+    """
+    qry_bytes = _make_mbx_query(querier_hab, recipient_pre, topics, target_pre)
+    qry_b64 = base64.b64encode(qry_bytes).decode("ascii")
+    envelope = json.dumps({"action": "subscribe", "qry": qry_b64})
+    conn = websockets.sync.client.connect(ws_url)
+    conn.send(envelope)
+    return conn
 
 
 # ---------------------------------------------------------------------------
-# tests
+# tests — status / OOBI / error paths (safe to run against any target)
 # ---------------------------------------------------------------------------
 
 def test_status_endpoint_returns_mailbox_metadata():
-    """GET / returns JSON with mailbox AID and identifier metadata."""
+    """GET / returns JSON with mailbox AID, alias, sn, mode, and ws fields."""
     status, headers, body = http_get("/", accept="application/json")
     assert status == 200
     data = json.loads(body)
@@ -192,6 +216,9 @@ def test_status_endpoint_returns_mailbox_metadata():
     # All start with "mailbox".
     assert data["alias"].startswith("mailbox")
     assert data["sn"] == 0       # non-trans inception only
+    assert data.get("mode") == "notify-and-fetch", \
+        f"expected mode=notify-and-fetch in status: {data!r}"
+    assert data.get("ws"), "status JSON missing ws field"
 
 
 def test_oobi_returns_signed_cesr_stream(mailbox_pre):
@@ -243,11 +270,15 @@ def test_kel_post_returns_204(fresh_hby):
     assert status == 204
 
 
-def test_mbx_query_returns_streaming_response(fresh_hby, mailbox_pre):
-    """POST signed qry r=/mbx returns 200 + Content-Type: text/event-stream.
+def test_mbx_query_returns_onboarding_headers(fresh_hby, mailbox_pre):
+    """POST signed qry r=/mbx returns 200 with serverless onboarding headers.
 
-    Just opens the stream and confirms the header — doesn't try to read
-    the body (which would hold the connection open for up to 5 min).
+    The serverless one-shot flow sets:
+      X-Mailbox-Mode: notify-and-fetch
+      X-Mailbox-Client: (optional hint for library version negotiation)
+
+    The response body is the drained backlog (may be empty); it CLOSES after
+    the drain completes — NOT a long-lived SSE stream.
     """
     bob = fresh_hby.makeHab(name="bob", transferable=False,
                             isith="1", icount=1, ncount=0, nsith="0")
@@ -261,82 +292,16 @@ def test_mbx_query_returns_streaming_response(fresh_hby, mailbox_pre):
         topics={"/credential": -1, "/receipt": -1},
         target_pre=mailbox_pre,
     )
-    req = urllib.request.Request(
-        f"{MAILBOX_URL}/", data=qry_ims,
-        headers={"Content-Type": "application/cesr"}, method="POST",
-    )
-    r = urllib.request.urlopen(req, timeout=15)
-    try:
-        assert r.status == 200
-        assert r.headers.get("Content-Type") == "text/event-stream"
-    finally:
-        r.close()
-
-
-@pytest.mark.xfail(
-    reason=(
-        "keripy psr.parse(framed=True) hangs on the /fwd exn structure "
-        "produced by keri.peer.exchanging.exchange(embeds={'msg': ...}). "
-        "Reproduces against a fresh in-memory Habery (no Lambda/Falcon "
-        "involved), so this is a keripy parser issue with the embed/path "
-        "counter framing rather than a sam-mailbox bug. The mailbox handler "
-        "wires ForwardHandler correctly; if/when the parse hang is resolved "
-        "this test should start passing without code changes here."
-    ),
-    strict=False,
-    run=True,
-)
-def test_deposit_then_poll_round_trip(fresh_hby, mailbox_pre):
-    """Alice POSTs /fwd to mailbox; Bob POSTs qry r=/mbx and the deposited
-    message arrives on the SSE stream within the initial drain window.
-
-    End-to-end verification of:
-      - ForwardHandler registration routes /fwd to mailbox storage
-      - Signed-qry signature verification against a known KEL
-      - Streaming generator emits the queued message in the first poll
-        cycle (no need to wait for live arrivals or keepalives)
-    """
-    # Alice (sender) and Bob (recipient) — trans AIDs so /fwd can verify
-    alice = fresh_hby.makeHab(name="alice", transferable=True,
-                              isith="1", icount=1, ncount=1, nsith="1")
-    bob = fresh_hby.makeHab(name="bob", transferable=True,
-                            isith="1", icount=1, ncount=1, nsith="1")
-
-    # Mailbox needs Alice's KEL to verify her /fwd exn signature
-    s_a, _, _ = http_post_cesr("/", alice.msgOwnEvent(sn=0))
-    assert s_a == 204, f"alice icp publish: {s_a}"
-    # And Bob's KEL to verify his qry signature
-    s_b, _, _ = http_post_cesr("/", bob.msgOwnEvent(sn=0))
-    assert s_b == 204, f"bob icp publish: {s_b}"
-
-    # Alice forwards a small inner message to Bob's /credential topic
-    embedded = bob.msgOwnEvent(sn=0)  # any opaque CESR will do
-    fwd_ims = _make_fwd_message(
-        sender_hab=alice,
-        recipient_pre=bob.pre,
-        topic="/credential",
-        embedded_msg=embedded,
-    )
-    s_fwd, _, _ = http_post_cesr("/", fwd_ims)
-    assert s_fwd == 204, f"fwd POST: {s_fwd}"
-
-    # Now Bob polls — initial drain should yield the just-deposited message
-    qry_ims = _make_mbx_query(
-        querier_hab=bob,
-        recipient_pre=bob.pre,
-        topics={"/credential": -1},
-        target_pre=mailbox_pre,
-    )
-    status, headers, body_text = _read_sse_until(
-        qry_ims, expected_substr="event: /credential", max_seconds=12,
-    )
-    assert status == 200, f"poll status: {status}"
-    assert headers.get("Content-Type") == "text/event-stream", \
-        f"poll content type: {headers.get('Content-Type')!r}"
-    assert "event: /credential" in body_text, \
-        f"missing event:/credential in SSE body: {body_text[:400]!r}"
-    assert "id: 0" in body_text, \
-        f"missing id:0 in SSE body: {body_text[:400]!r}"
+    status, headers, body = _drain_mbx_response(qry_ims, max_seconds=12)
+    assert status == 200, f"mbx qry status: {status}"
+    assert headers.get("X-Mailbox-Mode") == "notify-and-fetch", \
+        f"missing/wrong X-Mailbox-Mode: {dict(headers)!r}"
+    # X-Mailbox-Client is optional — assert it is present (may be empty string)
+    assert "x-mailbox-client" in headers, \
+        f"X-Mailbox-Client header missing: {dict(headers)!r}"
+    # Response must close (body is a complete, finite drain — not streaming)
+    # The assertion is structural: _drain_mbx_response reads until EOF, which
+    # would time-out on a 780-second long-poll.  Reaching here proves closure.
 
 
 def test_mbx_query_missing_q_pre_returns_400(fresh_hby, mailbox_pre):
@@ -360,3 +325,95 @@ def test_mbx_query_missing_q_pre_returns_400(fresh_hby, mailbox_pre):
         pytest.fail("expected HTTPError 400, got 2xx response")
     except urllib.error.HTTPError as exc:
         assert exc.code == 400, f"expected 400, got {exc.code}"
+
+
+# ---------------------------------------------------------------------------
+# tests — serverless notify-and-fetch flow (require dev stage, Task 8)
+# ---------------------------------------------------------------------------
+
+def test_ws_subscribe_then_deposit_nudge_drain(fresh_hby, mailbox_pre, mailbox_ws_url):
+    """Full serverless notify-and-fetch round-trip (§5.3 / §5.5 / §5.7).
+
+    Steps (in sequence):
+
+      (a) WS subscribe — open a WebSocket to the wss:// URL discovered from
+          the status JSON ``ws`` field; send a signed subscribe envelope.
+      (b) Deposit     — POST a signed ``/fwd`` exn depositing a message for
+          Bob's ``/credential`` topic.
+      (c) Nudge       — assert a ``mailbox.nudge`` JSON frame arrives on the
+          WS within NUDGE_TIMEOUT seconds.
+      (d) Drain       — POST a signed ``qry r=/mbx``; assert the response
+          delivers the deposited message AND closes (drain-then-EOF, NOT
+          a long-poll stream).  Assert ``X-Mailbox-Mode: notify-and-fetch``.
+    """
+    alice = fresh_hby.makeHab(name="alice", transferable=True,
+                              isith="1", icount=1, ncount=1, nsith="1")
+    bob = fresh_hby.makeHab(name="bob", transferable=True,
+                            isith="1", icount=1, ncount=1, nsith="1")
+
+    # Mailbox needs both KELs to verify signatures
+    s_a, _, _ = http_post_cesr("/", alice.msgOwnEvent(sn=0))
+    assert s_a == 204, f"alice icp publish: {s_a}"
+    s_b, _, _ = http_post_cesr("/", bob.msgOwnEvent(sn=0))
+    assert s_b == 204, f"bob icp publish: {s_b}"
+
+    # (a) WS subscribe — Bob subscribes for his own /credential topic
+    conn = _ws_subscribe(
+        ws_url=mailbox_ws_url,
+        querier_hab=bob,
+        recipient_pre=bob.pre,
+        topics={"/credential": -1},
+        target_pre=mailbox_pre,
+    )
+    try:
+        # (b) Deposit — Alice forwards a small inner message to Bob's /credential topic
+        embedded = bob.msgOwnEvent(sn=0)  # any opaque CESR bytes will do
+        fwd_ims = _make_fwd_message(
+            sender_hab=alice,
+            recipient_pre=bob.pre,
+            topic="/credential",
+            embedded_msg=embedded,
+        )
+        s_fwd, _, _ = http_post_cesr("/", fwd_ims)
+        assert s_fwd == 204, f"fwd POST: {s_fwd}"
+
+        # (c) Nudge — wait for mailbox.nudge frame on the WS
+        deadline = time.monotonic() + NUDGE_TIMEOUT
+        nudge_frame = None
+        while time.monotonic() < deadline:
+            try:
+                remaining = max(0.5, deadline - time.monotonic())
+                raw = conn.recv(timeout=remaining)
+                frame = json.loads(raw)
+                if frame.get("type") == "mailbox.nudge":
+                    nudge_frame = frame
+                    break
+            except TimeoutError:
+                break
+        assert nudge_frame is not None, \
+            "no mailbox.nudge frame received within timeout"
+        assert nudge_frame.get("pre") == bob.pre, \
+            f"nudge.pre mismatch: {nudge_frame!r}"
+        assert nudge_frame.get("topic") == "/credential", \
+            f"nudge.topic mismatch: {nudge_frame!r}"
+    finally:
+        conn.close()
+
+    # (d) Drain — one-shot fetch: response delivers backlog and CLOSES
+    qry_ims = _make_mbx_query(
+        querier_hab=bob,
+        recipient_pre=bob.pre,
+        topics={"/credential": -1},
+        target_pre=mailbox_pre,
+    )
+    status, headers, body = _drain_mbx_response(qry_ims, max_seconds=12)
+    assert status == 200, f"drain status: {status}"
+    assert headers.get("X-Mailbox-Mode") == "notify-and-fetch", \
+        f"missing X-Mailbox-Mode: {dict(headers)!r}"
+    # The deposited message must appear in the drained body (as an SSE event
+    # or raw CESR; the probe checks presence of the /credential topic marker)
+    body_text = body.decode("utf-8", errors="replace")
+    assert "/credential" in body_text, \
+        f"deposited message not in drained body: {body_text[:400]!r}"
+    # Reaching here proves the response closed; a 780-second long-poll would
+    # have timed out _drain_mbx_response before we reached this assertion.
