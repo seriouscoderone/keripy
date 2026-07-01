@@ -564,3 +564,206 @@ def test_keeper_is_encrypted(monkeypatch):
         ks = mailbox_handler._hby.ks
         assert len(ks.bran) == 21
         assert ks.bran == _mb_read_keeper_secret()["bran"]
+
+
+# ---------------------------------------------------------------------------
+# Task 4: _detect_fwd + _notify_subscribers + nudge fan-out on /fwd deposit
+# ---------------------------------------------------------------------------
+
+_WS_CONN_TABLE = "test-ws-conn-registry-nudge"
+_WS_CALLBACK_URL = "https://fake-ws.execute-api.us-east-1.amazonaws.com/prod"
+
+
+def _make_fwd_serder(pre="Ebob", topic="credential"):
+    """Build a minimal /fwd exn serder (unsigned, for peek-only tests).
+
+    Uses keri.core.eventing.exchange which places modifiers in the 'q' field,
+    matching the /fwd exn structure that _detect_fwd reads from serder.ked["q"].
+    """
+    from keri.core.eventing import exchange
+    fwd_serder = exchange(
+        route="/fwd",
+        sender="BAlice_fake_sender_for_test",
+        modifiers={"pre": pre, "topic": topic},
+    )
+    return fwd_serder
+
+
+@pytest.fixture
+def nudge_conn_table(monkeypatch):
+    """Create the WS registry table + set env vars for nudge tests."""
+    monkeypatch.setenv("WS_CONN_TABLE", _WS_CONN_TABLE)
+    monkeypatch.setenv("WS_CALLBACK_URL", _WS_CALLBACK_URL)
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    with mock_aws():
+        import boto3
+        ddb = boto3.resource("dynamodb", region_name="us-east-1")
+        table = ddb.create_table(
+            TableName=_WS_CONN_TABLE,
+            KeySchema=[{"AttributeName": "connectionId", "KeyType": "HASH"}],
+            AttributeDefinitions=[
+                {"AttributeName": "connectionId", "AttributeType": "S"},
+                {"AttributeName": "pre", "AttributeType": "S"},
+            ],
+            GlobalSecondaryIndexes=[{
+                "IndexName": "byPre",
+                "KeySchema": [{"AttributeName": "pre", "KeyType": "HASH"}],
+                "Projection": {"ProjectionType": "ALL"},
+            }],
+            BillingMode="PAY_PER_REQUEST",
+        )
+        table.wait_until_exists()
+        yield table
+
+
+# --- _detect_fwd unit tests -------------------------------------------------
+
+def test_detect_fwd_returns_none_for_malformed():
+    from mailbox_handler import _detect_fwd
+    assert _detect_fwd(b"not a serder") is None
+    assert _detect_fwd(b"") is None
+
+
+def test_detect_fwd_returns_none_for_non_fwd():
+    """A /mbx qry must NOT be detected as a /fwd exn."""
+    from mailbox_handler import _detect_fwd
+    qry_serder = eventing.query(
+        route="/mbx",
+        query={"pre": "BFake_recipient", "topics": {"receipt": 0}}
+    )
+    assert _detect_fwd(qry_serder.raw) is None
+
+
+def test_detect_fwd_returns_serder_for_fwd_exn():
+    """A /fwd exn serder must be detected and returned."""
+    from mailbox_handler import _detect_fwd
+    fwd_serder = _make_fwd_serder(pre="Ebob", topic="credential")
+    result = _detect_fwd(fwd_serder.raw)
+    assert result is not None
+    assert result.ked["t"] == "exn"
+    assert result.ked["r"] == "/fwd"
+
+
+# --- nudge fire-and-forget + 204 never blocked tests ------------------------
+
+@needs_moto
+def test_fwd_deposit_sends_nudge_and_returns_204(nudge_conn_table, monkeypatch):
+    """A live registered connection for Ebob + a /fwd deposit → nudge sent + 204.
+
+    The nudge body must JSON-decode to {"type":"mailbox.nudge","pre":"Ebob",
+    "topic":"credential",...}.
+    """
+    from mailbox_handler import build_app
+
+    # Register a live connection for Ebob in the DynamoDB registry.
+    nudge_conn_table.put_item(Item={
+        "connectionId": "conn-abc-123",
+        "pre": "Ebob",
+        "topics": {"credential": 0},
+        "connectedAt": 0,
+        "expireAt": 9999999999,
+    })
+
+    fwd_serder = _make_fwd_serder(pre="Ebob", topic="credential")
+
+    sent_calls = []
+
+    def fake_post_to_connection(**kwargs):
+        sent_calls.append(kwargs)
+
+    fake_apigw = MagicMock()
+    fake_apigw.post_to_connection.side_effect = fake_post_to_connection
+
+    with patch("mailbox_handler._hby") as mock_hby, \
+         patch("mailbox_handler._detect_mbx_query", return_value=None), \
+         patch("boto3.client", return_value=fake_apigw):
+        mock_hby.psr.parse = MagicMock()
+        mock_hby.kvy.processEscrows = MagicMock()
+        client = testing.TestClient(build_app())
+        result = client.simulate_post(
+            "/", body=fwd_serder.raw,
+            headers={"Content-Type": "application/cesr"}
+        )
+
+    assert result.status_code == 204, f"expected 204, got {result.status_code}"
+    assert len(sent_calls) == 1, f"expected 1 nudge, got {sent_calls}"
+    assert sent_calls[0]["ConnectionId"] == "conn-abc-123"
+    nudge = json.loads(sent_calls[0]["Data"])
+    assert nudge["type"] == "mailbox.nudge"
+    assert nudge["pre"] == "Ebob"
+    assert nudge["topic"] == "credential"
+
+
+@needs_moto
+def test_fwd_deposit_gone_exception_reaps_stale_row_and_returns_204(nudge_conn_table, monkeypatch):
+    """GoneException from post_to_connection → registry row deleted + 204."""
+    from mailbox_handler import build_app, _notify_subscribers
+
+    nudge_conn_table.put_item(Item={
+        "connectionId": "conn-stale-gone",
+        "pre": "Ebob",
+        "topics": {"credential": 0},
+        "connectedAt": 0,
+        "expireAt": 9999999999,
+    })
+
+    fwd_serder = _make_fwd_serder(pre="Ebob", topic="credential")
+
+    # Simulate GoneException from the API GW management client.
+    fake_apigw = MagicMock()
+    fake_apigw.exceptions.GoneException = Exception
+    fake_apigw.post_to_connection.side_effect = fake_apigw.exceptions.GoneException("gone")
+
+    with patch("mailbox_handler._hby") as mock_hby, \
+         patch("mailbox_handler._detect_mbx_query", return_value=None), \
+         patch("boto3.client", return_value=fake_apigw):
+        mock_hby.psr.parse = MagicMock()
+        mock_hby.kvy.processEscrows = MagicMock()
+        client = testing.TestClient(build_app())
+        result = client.simulate_post(
+            "/", body=fwd_serder.raw,
+            headers={"Content-Type": "application/cesr"}
+        )
+
+    assert result.status_code == 204, f"expected 204, got {result.status_code}"
+
+    # The stale registry row must have been deleted.
+    remaining = nudge_conn_table.get_item(Key={"connectionId": "conn-stale-gone"})
+    assert "Item" not in remaining, "stale row should have been deleted on GoneException"
+
+
+@needs_moto
+def test_fwd_deposit_arbitrary_notify_error_still_returns_204(nudge_conn_table, monkeypatch):
+    """An arbitrary boto error in _notify_subscribers NEVER fails the 204 deposit."""
+    from mailbox_handler import build_app
+
+    nudge_conn_table.put_item(Item={
+        "connectionId": "conn-error",
+        "pre": "Ebob",
+        "topics": {"credential": 0},
+        "connectedAt": 0,
+        "expireAt": 9999999999,
+    })
+
+    fwd_serder = _make_fwd_serder(pre="Ebob", topic="credential")
+
+    # post_to_connection raises a generic (non-Gone) error.
+    fake_apigw = MagicMock()
+    fake_apigw.exceptions.GoneException = type("GoneException", (Exception,), {})
+    fake_apigw.post_to_connection.side_effect = RuntimeError("arbitrary boto failure")
+
+    with patch("mailbox_handler._hby") as mock_hby, \
+         patch("mailbox_handler._detect_mbx_query", return_value=None), \
+         patch("boto3.client", return_value=fake_apigw):
+        mock_hby.psr.parse = MagicMock()
+        mock_hby.kvy.processEscrows = MagicMock()
+        client = testing.TestClient(build_app())
+        result = client.simulate_post(
+            "/", body=fwd_serder.raw,
+            headers={"Content-Type": "application/cesr"}
+        )
+
+    # The deposit MUST return 204 regardless of the nudge failure.
+    assert result.status_code == 204, (
+        f"nudge error must not block the 204 deposit; got {result.status_code}"
+    )

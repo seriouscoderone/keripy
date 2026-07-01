@@ -382,6 +382,98 @@ def _detect_mbx_query(ims):
     return None
 
 
+def _detect_fwd(ims):
+    """Peek at the first message in ims; return its serder if it's an `exn`
+    with r='/fwd', else None.
+
+    Mirrors _detect_mbx_query: construct a SerderKERI to peek the type and
+    route fields without consuming the bytearray.  Returns None on parse
+    error so the caller treats unknown messages as plain deposits.
+    """
+    from keri.core import serdering
+    try:
+        serder = serdering.SerderKERI(raw=bytes(ims))
+    except Exception:
+        return None
+    if serder.ked.get("t") == "exn" and serder.ked.get("r") == "/fwd":
+        return serder
+    return None
+
+
+def _notify_subscribers(pre, topic):
+    """Push an out-of-band nudge to live WS subscribers for `pre`.
+
+    IMPORTANT: this nudge is NOT a KERI message.  It carries NO CESR, NO
+    signatures, NO payload — it is a tiny JSON hint that tells the client
+    "you have mail; do a signed qry r=/mbx fetch."  All signature-verified,
+    cursor-correct CESR stays on the client's subsequent HTTP fetch.  Never
+    put CESR in a nudge (hard 128 KB WS frame cap).
+
+    Design: fire-and-forget.  This entire function is wrapped in try/except
+    so ANY error (stale connection, missing table, boto timeout) NEVER delays
+    or fails the 204 deposit that called us.
+
+    GoneException handling: a GoneException from post_to_connection means
+    the WS connection is dead but the registry row was not cleaned up by
+    $disconnect (e.g. abrupt drop).  We DeleteItem the stale row so the
+    registry stays tidy.
+    """
+    import boto3
+
+    region = os.environ.get("AWS_DEFAULT_REGION") or os.environ.get("MAILBOX_REGION", "us-east-1")
+    table_name = os.environ.get("WS_CONN_TABLE", "")
+    callback_url = os.environ.get("WS_CALLBACK_URL", "")
+
+    if not table_name or not callback_url:
+        # WS infrastructure not wired (e.g. local dev without the WS stack).
+        logger.debug("_notify_subscribers: WS_CONN_TABLE or WS_CALLBACK_URL not set; skipping")
+        return
+
+    try:
+        ddb = boto3.resource("dynamodb", region_name=region)
+        table = ddb.Table(table_name)
+
+        # Query the GSI byPre for live connectionIds registered for this recipient.
+        resp = table.query(
+            IndexName="byPre",
+            KeyConditionExpression="pre = :pre",
+            ExpressionAttributeValues={":pre": pre},
+        )
+        connection_ids = [item["connectionId"] for item in resp.get("Items", [])]
+
+        if not connection_ids:
+            return
+
+        nudge = json.dumps({"type": "mailbox.nudge", "pre": pre, "topic": topic})
+        nudge_bytes = nudge.encode("utf-8")
+
+        apigw = boto3.client(
+            "apigatewaymanagementapi",
+            region_name=region,
+            endpoint_url=callback_url,
+        )
+
+        for cid in connection_ids:
+            try:
+                apigw.post_to_connection(ConnectionId=cid, Data=nudge_bytes)
+                logger.debug("nudge sent to connectionId=%s pre=%s topic=%s", cid, pre, topic)
+            except apigw.exceptions.GoneException:
+                # Connection is dead; remove the stale registry row.
+                logger.info("stale WS connection %s for pre=%s; deleting registry row", cid, pre)
+                try:
+                    table.delete_item(Key={"connectionId": cid})
+                except Exception as del_exc:
+                    logger.warning("failed to delete stale connection %s: %s", cid, del_exc)
+            except Exception as send_exc:
+                # Any other per-connection error (timeout, throttle, etc.) — log and continue.
+                logger.warning("nudge failed for connectionId=%s: %s", cid, send_exc)
+
+    except Exception as exc:
+        # Outer catch: DynamoDB query failures, boto client errors, etc.
+        # Must NEVER propagate — the 204 deposit is the authoritative operation.
+        logger.warning("_notify_subscribers failed (fire-and-forget): %s", exc, exc_info=True)
+
+
 async def _stream_mbx_response(pre, topics):
     """Async generator yielding SSE-framed bytes for a one-shot mbx drain.
 
@@ -517,8 +609,11 @@ class RootResource:
             resp.status = falcon.HTTP_400
             return
 
-        # Peek for mbx query before consuming ims via psr.parse.
+        # Peek for mbx query or /fwd exn before consuming ims via psr.parse.
+        # Both peeks are non-destructive (construct SerderKERI from a copy of
+        # the bytes); psr.parse below consumes the bytearray.
         mbx_serder = _detect_mbx_query(ims)
+        fwd_serder = _detect_fwd(ims) if mbx_serder is None else None
 
         # framed=True: one HTTP POST = one message + counted attachments
         # (streamCESRRequests contract). Without it, -V/-C wrapped attachments
@@ -540,6 +635,17 @@ class RootResource:
             resp.stream = _stream_mbx_response(pre, topics)
             resp.status = falcon.HTTP_200
             return
+
+        # /fwd exn deposit: the psr.parse above routed the exn to ForwardHandler
+        # (stored).  Now push a best-effort nudge to live WS subscribers.
+        # Fire-and-forget: _notify_subscribers catches all exceptions internally
+        # so the 204 is never delayed or blocked by the nudge path.
+        if fwd_serder is not None:
+            q = fwd_serder.ked.get("q") or {}
+            fwd_pre = q.get("pre", "")
+            fwd_topic = q.get("topic", "")
+            if fwd_pre:
+                _notify_subscribers(fwd_pre, fwd_topic)
 
         resp.status = falcon.HTTP_204
 

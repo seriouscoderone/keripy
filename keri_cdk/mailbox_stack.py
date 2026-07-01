@@ -329,6 +329,15 @@ class MailboxStack(Stack):
         self.fn.add_environment("WS_CALLBACK_URL", ws_stage.callback_url)
         self.fn.add_environment("WS_CONN_TABLE", conn_table.table_name)
 
+        # §5.5: inline notifier — self.fn queries the registry GSI (byPre) to
+        # find live connectionIds and deletes stale rows on GoneException.
+        # CDK grant helpers omit the GSI index ARN, so use an explicit policy
+        # (mirrors ws_default_fn :298-304 above — keep tight, no extra actions).
+        self.fn.add_to_role_policy(iam.PolicyStatement(
+            actions=["dynamodb:Query", "dynamodb:DeleteItem"],
+            resources=[conn_table.table_arn, f"{conn_table.table_arn}/index/*"],
+        ))
+
         # --- ACM Certificate (DNS-validated, synth-safe) -----------------------
         hosted_zone = r53.HostedZone.from_hosted_zone_attributes(
             self,

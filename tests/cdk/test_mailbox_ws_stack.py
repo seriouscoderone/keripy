@@ -252,3 +252,43 @@ def test_default_fn_registry_policy_includes_gsi_arn():
         "No IAM policy found with dynamodb:Query + a /index/* resource; "
         "ws_default_fn may be missing the GSI ARN in its registry policy"
     )
+
+
+def test_main_fn_registry_policy_includes_query_and_gsi_arn():
+    """§5.5: self.fn (deposit handler) must have dynamodb:Query with the GSI
+    ARN so the inline notifier can look up live connectionIds via byPre.
+
+    CDK grant helpers omit the index ARN; the explicit PolicyStatement in
+    Change B is the only reliable way to verify this is present.
+    """
+    t = _synth()
+    # Collect all IAM policies that are attached to the main LWA Lambda's role.
+    # Strategy: find all policies, look for one with both dynamodb:Query and
+    # dynamodb:DeleteItem (the two actions granted by Change B), where at least
+    # one resource ends in /index/*.
+    policies = t.find_resources("AWS::IAM::Policy")
+    found = False
+    for policy in policies.values():
+        stmts = policy["Properties"]["PolicyDocument"].get("Statement", [])
+        for stmt in stmts:
+            actions = stmt.get("Action", [])
+            if isinstance(actions, str):
+                actions = [actions]
+            if "dynamodb:Query" not in actions or "dynamodb:DeleteItem" not in actions:
+                continue
+            # Both actions present — check for /index/* resource (GSI ARN).
+            resources = stmt.get("Resource", [])
+            if not isinstance(resources, list):
+                resources = [resources]
+            for res in resources:
+                if "/index/*" in str(res):
+                    found = True
+                    break
+            if found:
+                break
+        if found:
+            break
+    assert found, (
+        "self.fn policy with dynamodb:Query + dynamodb:DeleteItem + /index/* resource "
+        "not found; Change B (self.fn registry IAM) may be missing"
+    )
