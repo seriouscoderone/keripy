@@ -241,10 +241,15 @@ class MailboxStack(Stack):
         ))
 
         # subscribe / $default handler: needs full Habery (keri layer + env + IAM).
+        # The Habery cold-start (DynamoDB + KEL load + self-endpoint publish) exceeds
+        # the Lambda default 3s timeout, so give it headroom; more memory also means
+        # more CPU -> faster cold-start. connect/disconnect stay at the light defaults.
         ws_default_fn = _lambda.Function(
             self,
             "WsDefaultFunction",
             handler="ws_handlers.default",
+            timeout=Duration.seconds(60),
+            memory_size=1024,
             layers=[keri_layer],
             environment={
                 "LD_LIBRARY_PATH": "/opt/lib",

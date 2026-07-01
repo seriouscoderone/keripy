@@ -48,6 +48,7 @@ from keri.core.signing import Salter       # noqa: E402
 MAILBOX_URL = os.environ.get("MAILBOX_URL", "https://mailbox.keri.host").rstrip("/")
 TIMEOUT = 30  # seconds per HTTP call
 NUDGE_TIMEOUT = 15  # seconds to wait for a WS nudge frame
+SUBSCRIBE_SETTLE_S = 8  # let $default cold-start + PutItem + GSI propagation land before deposit
 
 
 # ---------------------------------------------------------------------------
@@ -371,6 +372,16 @@ def test_ws_subscribe_then_deposit_nudge_drain(fresh_hby, mailbox_pre, mailbox_w
         target_pre=mailbox_pre,
     )
     try:
+        # Let the subscribe settle before depositing.  _ws_subscribe only *sends*
+        # the envelope over the socket; the $default Lambda then cold-starts a
+        # Habery (~3s) and PutItem's the connection row, and the deposit's notifier
+        # queries the registry GSI byPre — which is eventually consistent.  Give the
+        # async registration + GSI propagation time to land, else the notifier sees
+        # 0 connections and no nudge fires.  (In production a client subscribes and
+        # stays connected long before any deposit; this only matters for the probe's
+        # tight subscribe->deposit timing.)
+        time.sleep(SUBSCRIBE_SETTLE_S)
+
         # (b) Deposit — Alice forwards a small inner message to Bob's credential topic.
         # BARE topic modifier ("credential") — canonical keripy sender form per
         # forwarding.py:273/291/308; stored key = "{pre}/credential".
