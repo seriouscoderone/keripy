@@ -138,6 +138,11 @@ def _publish_self_endpoints():
     msgs.extend(_hab.makeEndRole(eid=_hab.pre, role=Roles.controller, stamp=stamp))
     msgs.extend(_hab.makeEndRole(eid=_hab.pre, role=Roles.mailbox, stamp=stamp))
     msgs.extend(_hab.makeLocScheme(url=mailbox_url, scheme=scheme, stamp=stamp))
+
+    ws_url = os.environ.get("MAILBOX_WS_URL", "").strip()
+    if ws_url:
+        msgs.extend(_hab.makeLocScheme(url=ws_url, scheme=Schemes.wss, stamp=stamp))
+
     try:
         _hby.psr.parse(ims=msgs)
     except Exception as exc:
@@ -578,6 +583,9 @@ class RootResource:
             "alias": _hab.name,
             "sn": _hab.kever.sn,
             "kevers": len(_hby.kevers),
+            "ws": os.environ.get("MAILBOX_WS_URL", ""),
+            "mode": "notify-and-fetch",
+            "client": "https://github.com/usuranceai/keri-serverless-mailbox",
         }
         resp.status = falcon.HTTP_200
 
@@ -632,6 +640,9 @@ class RootResource:
             resp.content_type = "text/event-stream"
             resp.set_header("Cache-Control", "no-cache")
             resp.set_header("X-Accel-Buffering", "no")
+            resp.set_header("X-Mailbox-Mode", "notify-and-fetch")
+            resp.set_header("X-Mailbox-Client",
+                            "https://github.com/usuranceai/keri-serverless-mailbox")
             resp.stream = _stream_mbx_response(pre, topics)
             resp.status = falcon.HTTP_200
             return

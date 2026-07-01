@@ -326,7 +326,12 @@ class MailboxStack(Stack):
 
         # §5.6: REST deposit handler needs ManageConnections to push nudges.
         ws_api.grant_manage_connections(self.fn)
+        # WS_CALLBACK_URL = ws_stage.callback_url (https://…/prod) — management endpoint
+        # used by the inline notifier (post_to_connection).
         self.fn.add_environment("WS_CALLBACK_URL", ws_stage.callback_url)
+        # MAILBOX_WS_URL = ws_stage.url (wss://…/prod) — the connect endpoint clients dial;
+        # published as the mailbox AID's wss loc scheme (§5.7) and surfaced in GET /.
+        self.fn.add_environment("MAILBOX_WS_URL", ws_stage.url)
         self.fn.add_environment("WS_CONN_TABLE", conn_table.table_name)
 
         # §5.5: inline notifier — self.fn queries the registry GSI (byPre) to

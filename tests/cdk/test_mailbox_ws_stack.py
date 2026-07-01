@@ -292,3 +292,55 @@ def test_main_fn_registry_policy_includes_query_and_gsi_arn():
         "self.fn policy with dynamodb:Query + dynamodb:DeleteItem + /index/* resource "
         "not found; Change B (self.fn registry IAM) may be missing"
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 5 (Change B): MAILBOX_WS_URL env on self.fn (distinct from WS_CALLBACK_URL)
+# ---------------------------------------------------------------------------
+
+def test_fn_has_mailbox_ws_url_env():
+    """self.fn must receive MAILBOX_WS_URL in its environment (the wss:// client-connect URL).
+
+    §5.7: MAILBOX_WS_URL = ws_stage.url (wss://…/prod), the endpoint clients dial.
+    This is distinct from WS_CALLBACK_URL = ws_stage.callback_url (the https://…/prod
+    management endpoint used by the inline notifier to push nudges).
+    """
+    t = _synth()
+    fns = t.find_resources("AWS::Lambda::Function")
+    main_fn_env = None
+    for props in fns.values():
+        env = props["Properties"].get("Environment", {}).get("Variables", {})
+        if "AWS_LWA_INVOKE_MODE" in env:
+            main_fn_env = env
+            break
+    assert main_fn_env is not None, "could not find main LWA mailbox Lambda"
+    assert "MAILBOX_WS_URL" in main_fn_env, (
+        "MAILBOX_WS_URL missing from main mailbox Lambda env; "
+        "add_environment('MAILBOX_WS_URL', ws_stage.url) may be absent"
+    )
+
+
+def test_mailbox_ws_url_is_distinct_from_ws_callback_url():
+    """MAILBOX_WS_URL and WS_CALLBACK_URL must both be present and have different values.
+
+    MAILBOX_WS_URL = ws_stage.url (wss://…/prod) — the connect endpoint clients dial.
+    WS_CALLBACK_URL = ws_stage.callback_url (https://…/prod) — the mgmt endpoint for nudges.
+    They must not be accidentally conflated (both should be non-empty and differ).
+    """
+    t = _synth()
+    fns = t.find_resources("AWS::Lambda::Function")
+    main_fn_env = None
+    for props in fns.values():
+        env = props["Properties"].get("Environment", {}).get("Variables", {})
+        if "AWS_LWA_INVOKE_MODE" in env:
+            main_fn_env = env
+            break
+    assert main_fn_env is not None, "could not find main LWA mailbox Lambda"
+    ws_url = main_fn_env.get("MAILBOX_WS_URL")
+    cb_url = main_fn_env.get("WS_CALLBACK_URL")
+    assert ws_url is not None, "MAILBOX_WS_URL must be present"
+    assert cb_url is not None, "WS_CALLBACK_URL must be present"
+    assert ws_url != cb_url, (
+        f"MAILBOX_WS_URL ({ws_url!r}) must differ from WS_CALLBACK_URL ({cb_url!r}); "
+        "they are two different API GW endpoints (connect vs manage-connections)"
+    )

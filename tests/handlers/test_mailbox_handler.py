@@ -767,3 +767,151 @@ def test_fwd_deposit_arbitrary_notify_error_still_returns_204(nudge_conn_table, 
     assert result.status_code == 204, (
         f"nudge error must not block the 204 deposit; got {result.status_code}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 5: wss publish + onboarding (Change A / C / D)
+# ---------------------------------------------------------------------------
+
+_PKG_URL = "https://github.com/usuranceai/keri-serverless-mailbox"
+
+
+# --- Change A: _publish_self_endpoints() publishes a wss loc when MAILBOX_WS_URL is set ---
+
+def test_publish_self_endpoints_publishes_wss_loc(monkeypatch, tmp_path):
+    """_publish_self_endpoints() writes a wss loc scheme so fetchUrl returns the wss URL.
+
+    TDD: RED before Change A — _publish_self_endpoints() ignores MAILBOX_WS_URL,
+    so fetchUrl(wss) returns None.  GREEN after Change A adds the guarded loc.
+    """
+    import mailbox_handler
+
+    hby = Habery(name="t5wss", temp=True, salt=Salter().qb64)
+    hab = hby.makeHab(name="mbx", transferable=False)
+
+    # Wire module singletons (bypasses init() — autouse fixture already patched it out)
+    mailbox_handler._hby = hby
+    mailbox_handler._hab = hab
+
+    wss_url = "wss://mailbox.example.com/prod"
+    https_url = "https://mailbox.example.com"
+    monkeypatch.setenv("MAILBOX_WS_URL", wss_url)
+    monkeypatch.setenv("MAILBOX_URL", https_url)
+
+    try:
+        mailbox_handler._publish_self_endpoints()
+
+        from keri.kering import Schemes
+        result_wss = hab.fetchUrl(hab.pre, scheme=Schemes.wss)
+        result_https = hab.fetchUrl(hab.pre, scheme=Schemes.https)
+
+        assert result_wss == wss_url, (
+            f"fetchUrl(wss) should return {wss_url!r}; got {result_wss!r}"
+        )
+        # Regression: the existing https loc must not be disturbed
+        assert result_https == https_url, (
+            f"fetchUrl(https) should return {https_url!r}; got {result_https!r}"
+        )
+    finally:
+        hby.close()
+        mailbox_handler._hby = None
+        mailbox_handler._hab = None
+
+
+def test_publish_self_endpoints_no_wss_loc_when_unset(monkeypatch):
+    """When MAILBOX_WS_URL is unset, no wss loc is published (fetchUrl wss → None/absent)
+    and the https loc is unaffected.
+    """
+    import mailbox_handler
+
+    hby = Habery(name="t5nowss", temp=True, salt=Salter().qb64)
+    hab = hby.makeHab(name="mbx", transferable=False)
+
+    mailbox_handler._hby = hby
+    mailbox_handler._hab = hab
+
+    https_url = "https://mailbox.example.com"
+    monkeypatch.delenv("MAILBOX_WS_URL", raising=False)
+    monkeypatch.setenv("MAILBOX_URL", https_url)
+
+    try:
+        mailbox_handler._publish_self_endpoints()
+
+        from keri.kering import Schemes
+        result_wss = hab.fetchUrl(hab.pre, scheme=Schemes.wss)
+        result_https = hab.fetchUrl(hab.pre, scheme=Schemes.https)
+
+        assert result_wss is None or result_wss == "", (
+            f"fetchUrl(wss) should be absent when MAILBOX_WS_URL is unset; got {result_wss!r}"
+        )
+        assert result_https == https_url, (
+            f"fetchUrl(https) should still return {https_url!r}; got {result_https!r}"
+        )
+    finally:
+        hby.close()
+        mailbox_handler._hby = None
+        mailbox_handler._hab = None
+
+
+# --- Change C: GET / status JSON gains ws / mode / client fields ---
+
+def test_get_status_has_mode_ws_client_fields(monkeypatch):
+    """GET / returns mode='notify-and-fetch', ws=wss_url, client=package_url."""
+    from mailbox_handler import build_app
+
+    wss_url = "wss://mailbox.example.com/prod"
+    monkeypatch.setenv("MAILBOX_WS_URL", wss_url)
+
+    with patch("mailbox_handler._hab") as mock_hab, \
+         patch("mailbox_handler._hby") as mock_hby:
+        mock_hab.pre = "BFake_mailbox_AID_for_test_only_"
+        mock_hab.name = "mailbox"
+        mock_hab.kever.sn = 0
+        mock_hby.kevers = {"BFake_mailbox_AID_for_test_only_": object()}
+        client = testing.TestClient(build_app())
+        result = client.simulate_get("/")
+
+    assert result.status_code == 200
+    assert result.json.get("mode") == "notify-and-fetch", (
+        f"GET / must include mode='notify-and-fetch'; got {result.json!r}"
+    )
+    assert result.json.get("ws") == wss_url, (
+        f"GET / must include ws={wss_url!r}; got {result.json!r}"
+    )
+    assert result.json.get("client") == _PKG_URL, (
+        f"GET / must include client={_PKG_URL!r}; got {result.json!r}"
+    )
+
+
+# --- Change D: drain response carries X-Mailbox-Mode + X-Mailbox-Client headers ---
+
+def test_drain_response_has_onboarding_headers():
+    """The qry r=/mbx drain response carries X-Mailbox-Mode and X-Mailbox-Client headers."""
+    from mailbox_handler import build_app
+
+    fake_serder = MagicMock()
+    fake_serder.ked = {
+        "t": "qry", "r": "/mbx",
+        "q": {"pre": "BRecipient", "topics": {"receipt": 0}}
+    }
+    sse_chunk = b"id: 0\nevent: receipt\nretry: 1000\ndata: msg\n\n"
+
+    async def fake_stream(pre, topics):
+        yield sse_chunk
+
+    with patch("mailbox_handler._hby") as mock_hby, \
+         patch("mailbox_handler._detect_mbx_query", return_value=fake_serder), \
+         patch("mailbox_handler._stream_mbx_response", side_effect=fake_stream):
+        mock_hby.psr.parse = MagicMock()
+        mock_hby.kvy.processEscrows = MagicMock()
+        client = testing.TestClient(build_app())
+        result = client.simulate_post("/", body=b"FAKE_CESR",
+                                     headers={"Content-Type": "application/cesr"})
+
+    assert result.status_code == 200
+    assert result.headers.get("X-Mailbox-Mode") == "notify-and-fetch", (
+        f"drain response must have X-Mailbox-Mode header; got {dict(result.headers)!r}"
+    )
+    assert result.headers.get("X-Mailbox-Client") == _PKG_URL, (
+        f"drain response must have X-Mailbox-Client header; got {dict(result.headers)!r}"
+    )
