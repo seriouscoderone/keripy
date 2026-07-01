@@ -116,8 +116,15 @@ def default(event, context):
     except Exception:
         return {"statusCode": 400, "error": "qry must be base64-encoded CESR bytes"}
 
-    # Peek: must be a /mbx qry
-    from keri_cdk.handlers.mailbox import mailbox_handler
+    # Peek: must be a /mbx qry.
+    # The Lambda bundles the handler dir FLAT at /var/task (asset=_HANDLER_DIR), so
+    # mailbox_handler is a TOP-LEVEL module there — NOT keri_cdk.handlers.mailbox.
+    # Import flat (works in the Lambda AND in tests via the conftest sys.modules
+    # alias); fall back to the package path for any dev context lacking that alias.
+    try:
+        import mailbox_handler
+    except ModuleNotFoundError:
+        from keri_cdk.handlers.mailbox import mailbox_handler
     mbx_serder = mailbox_handler._detect_mbx_query(qry_bytes)
     if mbx_serder is None:
         return {"statusCode": 400, "error": "qry is not a valid /mbx query serder"}

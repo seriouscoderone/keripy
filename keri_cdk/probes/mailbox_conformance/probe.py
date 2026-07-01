@@ -130,22 +130,23 @@ def http_post_cesr(path, body, read_response=True):
 def _make_fwd_message(sender_hab, recipient_pre, topic, embedded_msg):
     """Build a signed /fwd exn message ready to POST to the mailbox.
 
-    Mirrors keripy's reference fwd construction at
-    keri.app.forwarding.StreamPoster._fwd:
-      - exchange(route="/fwd", sender=alice.pre, modifiers={pre, topic},
-                 embeds={"msg": inner_bytes})
-      - hab.endorse(serder) signs the exn with the sender's keys.
+    Mirrors keripy's canonical fwd construction (keri.app.forwarding, which uses
+    peer.exchanging.specialExchange with an `evt` embed):
+      - specialExchange(sender, route="/fwd", modifiers={pre, topic},
+                        attributes={}, embeds=dict(evt=<inner CESR>)) -> (fwd, atc)
+      - hab.endorse(serder=fwd, last=False, framed=True) signs the exn; the
+        embeds attachment `atc` is appended AFTER the signed exn.
     """
-    from keri.core.eventing import exchange
-    fwd_serder, fwd_end = exchange(
-        route="/fwd",
+    from keri.peer.exchanging import specialExchange
+    fwd, atc = specialExchange(
         sender=sender_hab.pre,
+        route="/fwd",
         modifiers={"pre": recipient_pre, "topic": topic},
-        payload={},
-        embeds={"msg": bytes(embedded_msg)},
+        attributes={},
+        embeds=dict(evt=bytes(embedded_msg)),
     )
-    signed = sender_hab.endorse(fwd_serder, last=False)
-    signed.extend(fwd_end)
+    signed = sender_hab.endorse(serder=fwd, last=False, framed=True)
+    signed.extend(atc)
     return bytes(signed)
 
 
@@ -311,11 +312,15 @@ def test_mbx_query_missing_q_pre_returns_400(fresh_hby, mailbox_pre):
     s_b, _, _ = http_post_cesr("/", bob.msgOwnEvent(sn=0))
     assert s_b == 204
 
-    # Build a qry with no `pre` in the query body
-    q = dict(topics={"/credential": -1})  # NO 'pre'
-    qry_ims = bytes(bob.query(
-        pre=bob.pre, src=mailbox_pre, route="mbx", query=q,
-    ))
+    # Build a qry with NO recipient (neither q["i"] nor q["pre"]).  NOTE: hab.query
+    # auto-injects q["i"]=pre, so it can never omit the recipient; build the qry via
+    # eventing.query directly to genuinely exercise the handler's missing-recipient
+    # 400 guard (pre = q.get("i") or q.get("pre") -> None -> 400).
+    from keri.core import eventing
+    serder = eventing.query(
+        pre=bob.pre, route="mbx", query=dict(topics={"/credential": -1}),
+    )  # q has topics only — no "i", no "pre"
+    qry_ims = bytes(bob.endorse(serder, last=True, framed=False))
     req = urllib.request.Request(
         f"{MAILBOX_URL}/", data=qry_ims,
         headers={"Content-Type": "application/cesr"}, method="POST",
