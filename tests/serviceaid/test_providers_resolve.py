@@ -31,6 +31,8 @@ def test_mailbox_role_preferred_over_witness():
     assert isinstance(ep, Endpoint)
     assert ep.role == "mailbox" and ep.eid == "EMbx"
     assert ep.url == "https://mailbox.keri.host"
+    # the recipient the reply is addressed to (drives Poster.dest at delivery)
+    assert ep.cid == "EReq"
 
 
 def test_controller_preferred_over_mailbox():
@@ -74,7 +76,7 @@ def test_bound_resolver_picks_highest_priority_role_https():
         "mailbox": {"Embx": {"https": "https://mbx/", "http": "http://mbx/"}},
     })
     ep = BoundResolver(hab).resolve("Esender", hby=None)
-    assert ep == _Endpoint(role="mailbox", eid="Embx", url="https://mbx/")
+    assert ep == _Endpoint(role="mailbox", eid="Embx", url="https://mbx/", cid="Esender")
 
 
 def test_bound_resolver_raises_when_no_endpoint():

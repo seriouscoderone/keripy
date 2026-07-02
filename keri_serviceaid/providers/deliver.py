@@ -39,8 +39,14 @@ class PostmanDeliverer:
         del ims[:serder.size]
         attachment = bytes(ims) if ims else None
 
+        # dest is the RECIPIENT (endpoint.cid), not the resolved provider (endpoint.eid):
+        # Poster.forward() re-resolves the recipient's mailbox and /fwd-posts the grant
+        # there (stored under {recipient}/credential). Passing the provider eid instead
+        # makes Poster take the provider's own controller endpoint and bare-POST the grant,
+        # which a serverless mailbox drops. Fall back to eid for endpoints built without cid.
+        dest = endpoint.cid or endpoint.eid
         poster = self._poster or forwarding.Poster(hby=ctx.hby)
-        poster.send(dest=endpoint.eid, topic=GRANT_TOPIC, serder=serder,
+        poster.send(dest=dest, topic=GRANT_TOPIC, serder=serder,
                     hab=ctx.hab, attachment=attachment)
 
         if self._poster is None:

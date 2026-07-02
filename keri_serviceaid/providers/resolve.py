@@ -14,8 +14,15 @@ from typing import Protocol, runtime_checkable
 @dataclass
 class Endpoint:
     role: str            # "controller" | "agent" | "mailbox" | "witness"
-    eid: str             # endpoint provider AID
+    eid: str             # endpoint provider AID (the mailbox/controller/witness)
     url: str             # first reachable URL (https preferred)
+    cid: str = ""        # the recipient AID the reply is addressed to. This — not the
+                         # provider eid — is what the Deliverer hands Poster.dest, so
+                         # Poster.forward() resolves the recipient's mailbox and /fwd-posts
+                         # there. Sending the provider eid instead makes Poster take the
+                         # provider's own controller endpoint and bare-POST the reply,
+                         # which a serverless mailbox drops (it only stores /fwd-addressed
+                         # mail). Empty for endpoints built without a known recipient.
 
 
 class InStream:
@@ -61,7 +68,7 @@ class OracleResolver:
                 eid, locs = next(iter(ends[role].items()))
                 url = locs.get("https") or locs.get("http") or next(iter(locs.values()), "")
                 if url:
-                    return Endpoint(role=role, eid=eid, url=url)
+                    return Endpoint(role=role, eid=eid, url=url, cid=sender)
         raise LookupError(
             f"no reachable endpoint for {sender} via the oracle "
             "(in-stream/OOBI first-contact resolution is a named fallback seam)")
@@ -83,5 +90,5 @@ class BoundResolver:
                 eid, locs = next(iter(ends[role].items()))
                 url = locs.get("https") or locs.get("http") or next(iter(locs.values()), "")
                 if url:
-                    return Endpoint(role=role, eid=eid, url=url)
+                    return Endpoint(role=role, eid=eid, url=url, cid=sender)
         raise LookupError(f"no reachable endpoint for {sender} via bound hab")

@@ -24,13 +24,18 @@ def test_deliver_calls_poster_send_with_dest_and_topic():
     exn = make_exn("/ipex/grant", hab.pre, attributes={})
     msg = bytearray(exn.raw)
 
-    ep = Endpoint(role="mailbox", eid="EMbx", url="https://mailbox.keri.host")
+    ep = Endpoint(role="mailbox", eid="EMbx", url="https://mailbox.keri.host",
+                  cid="EReq")
     ctx = Context(hby=hby, hab=hab, rgy=None, registry_name="svc")
     deliverer.deliver(bytes(msg), ep, ctx)
 
     assert len(poster.calls) == 1
     call = poster.calls[0]
-    assert call["dest"] == "EMbx"            # deliver to the resolved endpoint provider
+    # deliver to the RECIPIENT (cid), not the mailbox provider (eid). Poster.forward()
+    # then resolves the recipient's mailbox and /fwd-posts there; sending to the provider
+    # would take the provider's own controller endpoint and bare-POST (dropped by a
+    # serverless mailbox, which only stores /fwd-addressed mail).
+    assert call["dest"] == "EReq"
     assert call["topic"] == "credential"
     assert call["hab"] is hab
     assert isinstance(call["serder"], serdering.SerderKERI)
