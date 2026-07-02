@@ -7,8 +7,10 @@ controller / agent / witness) for store-and-forward. The requester polls its
 mailbox (SSE qry route='mbx') to receive it."""
 from __future__ import annotations
 
+import time
 from typing import Protocol, runtime_checkable
 
+from hio.base import doing
 from keri.core import serdering
 from keri.app import forwarding
 
@@ -16,6 +18,24 @@ from .resolve import Endpoint
 from .issue import Context
 
 GRANT_TOPIC = "credential"
+
+# The Poster's /fwd POST is real network I/O: the TLS connect + response to a remote
+# mailbox takes wall-clock seconds. The drive must therefore be REAL-paced (advance in
+# step with wall-clock, sleeping between recurs so the socket can progress) and exit as
+# soon as the send completes — never a virtual-time Doist that races to its limit in
+# milliseconds and abandons the connect (the "give up before connect" bug class).
+_DELIVER_TIMEOUT_S = 15.0
+_DRIVE_TOCK = 0.03125
+
+
+def _drive_until_sent(doist, deeds, poster, said, *, timeout=_DELIVER_TIMEOUT_S,
+                      sleep=time.sleep, now=time.monotonic):
+    """Recur `doist` over `deeds`, real-paced, until `poster.sent(said)` or `timeout`
+    wall-clock seconds elapse. `sleep`/`now` are injectable for tests."""
+    start = now()
+    while not poster.sent(said) and (now() - start) < timeout:
+        doist.recur(deeds=deeds)
+        sleep(doist.tock)
 
 
 @runtime_checkable
@@ -27,8 +47,8 @@ class Deliverer(Protocol):
 
 class PostmanDeliverer:
     """Default deliverer. Splits the grant CESR stream into serder + attachment,
-    enqueues it on a Poster targeting endpoint.eid, then drains the Poster on a
-    virtual-time Doist so the /fwd post completes within the Lambda invocation."""
+    enqueues it on a Poster targeting the recipient (endpoint.cid), then drives the
+    Poster on a real-paced Doist until the /fwd POST completes (or a wall-clock cap)."""
 
     def __init__(self, poster=None):
         self._poster = poster   # injectable for tests; None ⇒ build per-deliver
@@ -50,9 +70,12 @@ class PostmanDeliverer:
                     hab=ctx.hab, attachment=attachment)
 
         if self._poster is None:
-            # Drive the real Poster's deliverDo to completion (it queues then posts).
-            # NOTE: Doist.do(doers=...) replaces self.doers, so the doer is entered
-            # exactly once here — do NOT also pass doers= to the constructor.
-            from hio.base import doing
-            doist = doing.Doist(real=False, tock=0.03125, limit=8.0)
-            doist.do(doers=[poster])
+            # Drive the real Poster's deliverDo until the /fwd POST completes. Real-paced
+            # with early exit (see _drive_until_sent): a virtual-time Doist would blow
+            # through its limit before the live TLS connect finished and drop the POST.
+            doist = doing.Doist(real=True, tock=_DRIVE_TOCK)
+            deeds = doist.enter(doers=[poster])
+            try:
+                _drive_until_sent(doist, deeds, poster, serder.said)
+            finally:
+                doist.exit(deeds=deeds)
