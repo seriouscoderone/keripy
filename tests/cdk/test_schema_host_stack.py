@@ -53,3 +53,22 @@ def test_distribution_alias_configured():
             "Aliases": ["schema.keri.host"],
         }
     })
+
+
+def test_lambda_env_has_cas_bucket():
+    t = _stack()
+    fns = t.find_resources("AWS::Lambda::Function")
+    assert any(
+        "SERVICEAID_CAS_BUCKET" in v.get("Properties", {}).get("Environment", {}).get("Variables", {})
+        for v in fns.values()
+    ), "publish Lambda must carry SERVICEAID_CAS_BUCKET"
+
+
+def test_distribution_has_schema_write_behavior():
+    t = _stack()
+    dists = t.find_resources("AWS::CloudFront::Distribution")
+    behaviors = []
+    for v in dists.values():
+        behaviors += v["Properties"]["DistributionConfig"].get("CacheBehaviors", []) or []
+    assert any(b.get("PathPattern") == "/schema/*" for b in behaviors), \
+        "distribution must route /schema/* to the write API"
