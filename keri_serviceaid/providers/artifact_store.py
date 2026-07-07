@@ -52,9 +52,6 @@ class LocalArtifactStore:
         return self._blobs.get(said)
 
 
-import boto3  # noqa: E402  (stdlib-then-third-party; boto3 only needed for S3ArtifactStore)
-
-
 class S3ArtifactStore:
     """Prod ArtifactStore: S3 CAS (object key ``<key_prefix><said>``,
     Content-Type application/schema+json) + serializable first-seen via a
@@ -62,11 +59,14 @@ class S3ArtifactStore:
 
     def __init__(self, bucket: str, db, *, store_name: str = "pub.",
                  key_prefix: str = "oobi/", s3=None):
+        if s3 is None:
+            import boto3
+            s3 = boto3.client("s3")
         self.bucket = bucket
         self.db = db
         self.store_name = store_name
         self.key_prefix = key_prefix
-        self._s3 = s3 or boto3.client("s3")
+        self._s3 = s3
 
     def store(self, said: str, raw: bytes, by: str) -> FirstSeenResult:
         # Idempotent by SAID: same content → same key; overwriting is a no-op.
@@ -86,7 +86,9 @@ class S3ArtifactStore:
                 first_publisher=by,
                 first_at=helping.nowIso8601(),
             )
-        prior = existing.decode("utf-8") if existing else ""
+        if existing is None:
+            raise RuntimeError(f"first-seen collision for {said} but no prior record recovered")
+        prior = existing.decode("utf-8")
         return FirstSeenResult(
             created=False,
             first_seen=False,
