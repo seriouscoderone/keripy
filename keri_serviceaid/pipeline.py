@@ -85,6 +85,30 @@ def process(state, serder, attachments) -> None:
         logger.info("revoked + delivered notice for %s to %s", said, endpoint.eid)
         return
 
+    if reply.kind == "publish":
+        ctx = Context(hby=state.hby, hab=state.hab, rgy=state.rgy,
+                      registry_name=state.cfg.alias)
+        fs = svc.artifact_store.store(reply.artifact_said, reply.artifact_bytes,
+                                      by=sender)
+        # Merge first-seen provenance into the receipt attributes (dt is stamped
+        # server-side by the issuer). priorContributor is null when first.
+        reply.attributes = {**(reply.attributes or {}),
+                            "firstSeen": fs.first_seen,
+                            "priorContributor": (None if fs.first_seen
+                                                 else {"aid": fs.first_publisher})}
+        reply.schema_said = cmd.issues           # the publication_receipt schema
+        grant = svc.issuer.issue(reply, ctx)     # mint + iss receipt into registry (ledger)
+        svc.idempotency.record(said, grant)      # BEFORE delivery (exactly-once)
+        if reply.want_receipt:
+            endpoint = svc.resolver.resolve(sender, state.hby)
+            svc.deliverer.deliver(grant, endpoint, ctx)
+            logger.info("published %s + delivered receipt to %s",
+                        reply.artifact_said, endpoint.eid)
+        else:
+            logger.info("published %s + recorded receipt (delivery not requested)",
+                        reply.artifact_said)
+        return
+
     # reject / none → v1: log, no reply.
     logger.info("command %s returned kind=%s — no reply (v1 grant+silence)",
                 route, reply.kind)
