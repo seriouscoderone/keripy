@@ -1,4 +1,13 @@
-"""Shared fixtures: temp Habery, a saidified ACDC schema, recipient AID."""
+"""Shared fixtures: temp Habery, a saidified ACDC schema, recipient AID.
+
+TRANSITIONAL v1 HOLD (2026-07-07): keripy's v2 ACDC issuance/registry/IPEX path is
+not implemented upstream yet, so serviceaid is held on KERI v1 on the v2 base. The
+autouse `_hold_serviceaid_v1` fixture below pins every test hab's inception to v1;
+the framework's own service hab is pinned in keri_serviceaid/runtime.py, the
+credential + grant exn in providers/issue.py, and the test exn builder in _exn.py.
+Lift the whole set as a unit when upstream ships v2 registry+IPEX. See the plan/spec
+docs/superpowers/{plans,specs}/2026-07-07-keri-v2-* in the locksmith repo.
+"""
 import os
 import sys
 import tempfile
