@@ -34,6 +34,11 @@ import types
 BASER_STORES = [
     "evts.",   "fels.",   "kels.",   "dtss.",   "aess.",
     "sigs.",   "wigs.",   "rcts.",   "ures.",   "vrcs.",
+    # v2 indexed transferable-receipt store (basing.py .vrcsNew). Per-witness
+    # WRITE-LOG exactly like vrcs. — NEVER add to SHARED_KEL_STORES: pooling
+    # receipt write-logs collapses all witnesses' receipts to one and breaks
+    # keri.app.agenting.Receiptor toad convergence (see the SHARED_KEL_STORES note).
+    "vrcsnew.",
     "vres.",   "pses.",   "pwes.",   "pdes.",   "udes.",
     "uwes.",   "ooes.",   "dels.",   "ldes.",   "qnfs.",
     "fons.",   "migs.",   "vers.",   "esrs.",   "mfes.",
