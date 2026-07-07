@@ -1,3 +1,4 @@
+import queue
 import threading
 
 from keri_serviceaid.providers.artifact_store import LocalArtifactStore, FirstSeenResult
@@ -22,12 +23,12 @@ def test_second_publisher_is_not_first_and_reports_prior():
 
 def test_concurrent_claims_yield_exactly_one_first_seen():
     store = LocalArtifactStore()
-    results = []
+    q = queue.Queue()
     barrier = threading.Barrier(8)
 
     def claim(aid):
         barrier.wait()
-        results.append(store.store("ESaid", b"{}", by=aid))
+        q.put(store.store("ESaid", b"{}", by=aid))
 
     threads = [threading.Thread(target=claim, args=(f"E{i}",)) for i in range(8)]
     for t in threads:
@@ -35,4 +36,5 @@ def test_concurrent_claims_yield_exactly_one_first_seen():
     for t in threads:
         t.join()
 
+    results = [q.get_nowait() for _ in range(8)]
     assert sum(1 for r in results if r.first_seen) == 1
