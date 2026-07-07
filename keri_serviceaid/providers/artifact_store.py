@@ -1,0 +1,52 @@
+"""ArtifactStore: the store-artifact effect for a publish command.
+
+A configurable capability that persists a public SAD (keyed by SAID) to a
+content-addressed store AND claims serializable first-seen (which AID published
+this SAID here first). Two impls: LocalArtifactStore (in-memory, tests) and
+S3ArtifactStore (S3 CAS + DynamoDB conditional first-seen). The store is a
+generic verb; the "first publisher" meaning is composed by the pipeline."""
+import threading
+from dataclasses import dataclass
+from typing import Protocol, runtime_checkable
+
+from keri.help import helping
+
+
+@dataclass
+class FirstSeenResult:
+    created: bool           # True if this call wrote the bytes for the first time
+    first_seen: bool        # True if `by` is the first publisher of this SAID here
+    first_publisher: str    # the AID that first published this SAID (== by if first_seen)
+    first_at: str           # ISO-8601 timestamp of the first publication
+
+
+@runtime_checkable
+class ArtifactStore(Protocol):
+    def store(self, said: str, raw: bytes, by: str) -> FirstSeenResult:
+        """Persist `raw` under `said` (idempotent) and claim first-seen for `by`."""
+        ...
+
+
+class LocalArtifactStore:
+    """In-memory, thread-safe ArtifactStore for the local runtime + tests."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._blobs: dict[str, bytes] = {}
+        self._first: dict[str, tuple[str, str]] = {}   # said -> (publisher, dt)
+
+    def store(self, said: str, raw: bytes, by: str) -> FirstSeenResult:
+        with self._lock:
+            created = said not in self._blobs
+            self._blobs[said] = bytes(raw)
+            if said not in self._first:
+                dt = helping.nowIso8601()
+                self._first[said] = (by, dt)
+                return FirstSeenResult(created=created, first_seen=True,
+                                       first_publisher=by, first_at=dt)
+            publisher, dt = self._first[said]
+            return FirstSeenResult(created=created, first_seen=False,
+                                   first_publisher=publisher, first_at=dt)
+
+    def get(self, said: str) -> bytes | None:
+        return self._blobs.get(said)
