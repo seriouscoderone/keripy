@@ -17,3 +17,4 @@ def test_publish_reply_defaults_want_receipt_false():
     r = Reply.publish(recipient="ERecip", artifact_said="EX",
                       artifact_bytes=b"{}", attributes={})
     assert r.want_receipt is False
+

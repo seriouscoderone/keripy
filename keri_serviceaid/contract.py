@@ -28,7 +28,7 @@ class Request:
 @dataclass
 class Reply:
     """Declarative reply. The framework performs issuance/signing/grant framing."""
-    kind: str                         # "acdc" | "none" | "reject" | "publish"
+    kind: str                         # "acdc" | "none" | "reject" | "revoke" | "publish"
     recipient: Optional[str] = None
     attributes: Optional[dict] = None
     edges: Optional[dict] = None
