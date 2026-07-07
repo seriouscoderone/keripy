@@ -379,7 +379,10 @@ class LMDBer(filing.Filer):
     TempPrefix = "keri_lmdb_"
     TempSuffix = "_test"
     Perm = stat.S_ISVTX | stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR  # 0o1700==960
-    MaxNamedDBs = 100
+    MaxNamedDBs = 200  # fork: raised from stock 100 — the fork opens more named
+    # sub-DBs than upstream (shared-KEL oracle stores + keri_serviceaid), and the
+    # origin/main sync added Baser stores, together exceeding the stock ceiling
+    # (lmdb MDB_DBS_FULL). max_dbs is just a ceiling; headroom costs negligible.
     MapSize = 104857600
 
     def __init__(self, readonly=False, **kwa):
