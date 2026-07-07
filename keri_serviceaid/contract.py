@@ -28,13 +28,16 @@ class Request:
 @dataclass
 class Reply:
     """Declarative reply. The framework performs issuance/signing/grant framing."""
-    kind: str                         # "acdc" | "none" | "reject"
+    kind: str                         # "acdc" | "none" | "reject" | "publish"
     recipient: Optional[str] = None
     attributes: Optional[dict] = None
     edges: Optional[dict] = None
     rules: Optional[dict] = None
     reason: Optional[str] = None
     schema_said: Optional[str] = None
+    artifact_said: Optional[str] = None
+    artifact_bytes: Optional[bytes] = None
+    want_receipt: bool = False
 
     @classmethod
     def acdc(cls, *, recipient: str, attributes: dict,
@@ -55,6 +58,17 @@ class Reply:
                reason: str = "") -> "Reply":
         return cls(kind="revoke", recipient=recipient,
                    attributes={"credential_said": credential_said}, reason=reason)
+
+    @classmethod
+    def publish(cls, *, recipient: str, artifact_said: str, artifact_bytes: bytes,
+                attributes: dict, want_receipt: bool = False,
+                edges: dict | None = None, rules: dict | None = None) -> "Reply":
+        """Store a public SAD artifact (by SAID) and record its publication.
+        The framework runs the ArtifactStore effect, then issues an optional
+        `publication_receipt` ACDC (delivered iff `want_receipt`)."""
+        return cls(kind="publish", recipient=recipient, attributes=attributes,
+                   edges=edges, rules=rules, artifact_said=artifact_said,
+                   artifact_bytes=artifact_bytes, want_receipt=want_receipt)
 
 
 @dataclass(frozen=True)
