@@ -11,6 +11,8 @@ either keri tree (the fork's `keri/src` or an installed keri).
 """
 import inspect
 
+from keri.kering import Vrsn_1_0, Kinds
+
 
 def _resolve_exchange():
     try:
@@ -34,5 +36,15 @@ def make_exn(route, sender, recipient="", attributes=None):
     kw["attributes" if "attributes" in params else "payload"] = attributes if attributes is not None else {}
     if recipient:
         kw["receiver" if "receiver" in params else "recipient"] = recipient
+    # TRANSITIONAL v1 hold: build v1 JSON exns to match the v1-held framework parser.
+    # keripy's v2 default is CESR-native, which the framework's v1 psr can't inhale
+    # (and which the CESR field-map serializer rejects for these payloads). Lift when
+    # the framework moves to v2 IPEX. Pass whichever version param this tree exposes.
+    if "version" in params:
+        kw["version"] = Vrsn_1_0
+    elif "pvrsn" in params:
+        kw["pvrsn"] = Vrsn_1_0
+    if "kind" in params:
+        kw["kind"] = Kinds.json
     res = _exchange(**kw)
     return res[0] if isinstance(res, tuple) else res
