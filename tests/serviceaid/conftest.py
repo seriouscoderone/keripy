@@ -44,7 +44,12 @@ def recipient_pre(issuer_hby):
     issuee's KEL to be known before issuing.
     """
     rcp_hby = Habery(name="rcp", temp=True, salt=Salter(raw=b'fedcba9876543210').qb64)
-    hab = rcp_hby.makeHab(name="rcp", transferable=True)
+    # TRANSITIONAL: keripy v2 ACDC issuance/registry/IPEX is not implemented upstream
+    # (acdc/registering.py, ipexing.py stubs; vc/proving.py:79 hardcodes ri). We hold
+    # serviceaid on v1. makeHab does NOT inherit hby.version, so pin the event body
+    # explicitly, else replay() emits a v2 body with v1 count-code attachments that the
+    # parser mis-reads. Lift as a unit when upstream ships v2 registry+IPEX.
+    hab = rcp_hby.makeHab(name="rcp", transferable=True, version=Vrsn_1_0)
     pre = hab.pre
     kel = hab.replay()
     rcp_hby.close()
@@ -52,6 +57,32 @@ def recipient_pre(issuer_hby):
     issuer_hby.kvy.processEscrows()
     assert pre in issuer_hby.kevers
     return pre
+
+
+@pytest.fixture(autouse=True)
+def _hold_serviceaid_v1(monkeypatch):
+    """TRANSITIONAL: hold every hab created in the serviceaid tests on KERI v1.
+
+    keripy's v2 ACDC issuance/registry/IPEX path is NOT implemented upstream
+    (acdc/registering.py, ipexing.py are empty stubs; vc/proving.py:79 hardcodes
+    the v1 `ri` label; vdr/ is Vrsn_1_0-pinned; registry inception still emits the
+    v1 `vcp` ilk, which v2 serdering rejects). `makeHab` does NOT inherit
+    `hby.version` and `Hab.incept` defaults to the v2 module version, so without
+    this every test hab — and the TEL registry it anchors — would incept v2 and
+    fail. Pin the single `Hab.incept` seam to v1 for the whole test session.
+
+    This is the test-side half of the v1 hold (the framework's own service hab is
+    pinned in keri_serviceaid/runtime.py). Lift this entire fixture as a unit when
+    upstream ships v2 registry+IPEX. See the plan/spec dated 2026-07-07.
+    """
+    from keri.app import habbing
+    _orig_incept = habbing.Hab.incept
+
+    def _incept_v1(self, *args, **kwa):
+        kwa.setdefault("version", Vrsn_1_0)
+        return _orig_incept(self, *args, **kwa)
+
+    monkeypatch.setattr(habbing.Hab, "incept", _incept_v1)
 
 
 def pytest_configure(config):

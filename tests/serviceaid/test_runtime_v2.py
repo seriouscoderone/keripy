@@ -86,7 +86,9 @@ def test_cross_habery_oracle_read_kever_visible():
 
         # A producer AID whose KEL we publish into the shared oracle.
         prod = Habery(name="prod", temp=True, salt=Salter(raw=b'aaaaaaaaaaaaaaaa').qb64)
-        producer = prod.makeHab(name="prod", transferable=True)
+        # TRANSITIONAL v1 hold (see conftest.recipient_pre): makeHab ignores hby.version,
+        # so pin the KEL to v1 for the v1 Parser below. Lift with the v2 registry+IPEX effort.
+        producer = prod.makeHab(name="prod", transferable=True, version=Vrsn_1_0)
         pre = producer.pre
         kel = bytearray(producer.replay())
         prod.close()

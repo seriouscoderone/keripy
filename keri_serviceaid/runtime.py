@@ -25,7 +25,7 @@ from keri.app.lambding import (BASER_STORES, REGER_STORES, SHARED_KEL_STORES,
 from keri.app.habbing import Habery
 from keri.app.configing import Configer
 from keri.app import agenting
-from keri.kering import Roles
+from keri.kering import Roles, Vrsn_1_0
 from keri.vdr import credentialing
 
 from .config import Config
@@ -102,7 +102,13 @@ def incept_or_load(hby, cfg: Config):
         return hab
 
     with hby.ks.deferflush():     # single atomic keeper write on incept
-        hab = hby.makeHab(name=cfg.alias, transferable=True,
+        # TRANSITIONAL: hold the service AID on KERI v1. keripy's v2 ACDC
+        # issuance/registry/IPEX is not implemented upstream (acdc/registering.py,
+        # ipexing.py stubs; vc/proving.py:79 hardcodes ri; registry inception still
+        # emits the v1 `vcp` ilk). makeHab does NOT inherit hby.version, so pin the
+        # event body explicitly; the registry inherits this pvrsn. Lift as a unit
+        # when upstream ships v2 registry+IPEX.
+        hab = hby.makeHab(name=cfg.alias, transferable=True, version=Vrsn_1_0,
                           wits=cfg.witnesses, toad=cfg.toad,
                           isith="1", icount=1, nsith="1", ncount=1)
     hby.prefixes.add(hab.pre)
