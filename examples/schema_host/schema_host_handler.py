@@ -22,16 +22,23 @@ RECEIPT_SCHEMA_SAID = svc.register_schema(json.loads(_SCHEMA_PATH.read_text()))
 
 
 def validate_public_schema(sad: dict) -> None:
-    """Guardrail: accept only a well-formed ACDC/JSON schema whose $id == its SAID.
+    """Guardrail: accept only a structurally-valid ACDC/JSON schema.
 
     Rejects anything lacking the JSON-Schema markers ($id/$schema) — which
     includes ACDC *instances* (they carry `d`/`i`/`a`, not `$id`), keeping
-    private subject data out of the public CAS. Raises ValueError on rejection."""
+    private subject data out of the public CAS. Raises ValueError on any
+    rejection, including structural schema invalidity."""
     if not isinstance(sad, dict) or "$id" not in sad or "$schema" not in sad:
         raise ValueError("not a JSON Schema SAD (missing $id/$schema) — "
                          "instances and non-schema SADs are refused")
-    # Schemer(verify=True) recomputes the SAID and checks it equals $id.
-    scheming.Schemer(sed=dict(sad), kind=Kinds.json)
+    # Schemer(sed=...) re-derives and canonicalizes $id to the content SAID
+    # (it does NOT check the incoming $id); it raises if the input is not a
+    # structurally-valid JSON Schema. The handler stores under the canonical
+    # schemer.said.
+    try:
+        scheming.Schemer(sed=dict(sad), kind=Kinds.json)
+    except Exception as exc:
+        raise ValueError(f"invalid ACDC schema: {exc}") from exc
 
 
 @svc.command(route="/schema/cmd/publish", issues=RECEIPT_SCHEMA_SAID)

@@ -46,6 +46,16 @@ def test_publish_rejects_sad_missing_schema_key():
         schema_host_handler.validate_public_schema({"$id": "Eabc"})
 
 
+def test_publish_rejects_structurally_invalid_schema():
+    # Has $id and $schema but is structurally invalid (type must be a string).
+    # validate_public_schema must surface this as ValueError, not a bare
+    # kering.ValidationError or any other exception type.
+    bad_schema = {"$id": "", "$schema": "http://json-schema.org/draft-07/schema#",
+                  "type": 123}
+    with pytest.raises(ValueError):
+        schema_host_handler.validate_public_schema(bad_schema)
+
+
 def test_publish_without_origin_sets_origin_none():
     schemer = _saidify(VALID_SCHEMA)
     sad = dict(schemer.sed)
