@@ -683,6 +683,27 @@ class DynamoDBer:
 
     delVal = remVal  # backwards compat alias
 
+    def claimFirstSeen(self, name: str, key: bytes, val: bytes) -> tuple[bool, bytes | None]:
+        """Serializable first-seen claim in sub-db ``name``.
+
+        Attempts a conditional put (attribute_not_exists) of ``val`` under
+        ``key``.  Returns ``(True, None)`` if this call claimed it; returns
+        ``(False, existing_bytes)`` if a prior claim exists.
+
+        ``val`` is the claimant identity (e.g. a publisher AID as bytes); this
+        is a generic verb — the caller composes the meaning (e.g. "first
+        publisher to anchor a given SAID").  No first-seen / attribution /
+        publisher semantics are baked in here.
+        """
+        db = self._stores[name]
+        claimed = self._put_item(db, key, _SK_SINGLE, bytes(val),
+                                 condition="attribute_not_exists(PK)",
+                                 gsi_sk=_hex(key))
+        if claimed:
+            return True, None
+        existing = self.getVal(db, key)
+        return False, (bytes(existing) if existing is not None else None)
+
     # ---- Ordinal-keyed (On) operations ----
 
     def putOnVal(self, db: DynamoSubDb, key: bytes, on: int = 0,
