@@ -23,7 +23,7 @@ import pytest
 from keri.kering import (EmptyMaterialError, RawMaterialError, ShortageError,
                          InvalidCodeSizeError, InvalidValueError, ValidationError,
                          InvalidVarRawSizeError, ConversionError, SoftMaterialError,
-                         InvalidSoftError, InvalidCodeError, Version,Vrsn_2_0,
+                         InvalidSoftError, InvalidCodeError, Version, Vrsn_1_0, Vrsn_2_0,
                          Protocols, Ilks, TraitDex, Kinds, versify)
 
 from keri.help import sceil, intToB64, codeB64ToB2, DTS_BASE_0, DTS_BASE_1
@@ -2547,6 +2547,8 @@ def test_number():
     assert number.numh == '0'
     assert number.sn == 0
     assert number.snh == '0'
+    assert number.onkey == '00000000000000000000000000000000'
+    assert len(number.onkey) == 32
     assert number.huge == '0AAAAAAAAAAAAAAAAAAAAAAA'
     assert len(number.huge) == 24
     assert not number.positive
@@ -2621,6 +2623,7 @@ def test_number():
     assert number.qb2 == nqb2
     assert number.num == num == number.sn
     assert number.numh == numh == number.snh
+    assert number.onkey == '0000000000000000000000000000ffff'
     assert number.positive
     bs = ceil((len(number.code) * 3) / 4)
     assert number.qb2[bs:] == number.raw
@@ -2633,6 +2636,7 @@ def test_number():
     assert number.qb2 == nqb2
     assert number.num == num == number.sn
     assert number.numh == numh == number.snh
+    assert number.onkey == '0000000000000000000000000000ffff'
     assert number.positive
     bs = ceil((len(number.code) * 3) / 4)
     assert number.qb2[bs:] == number.raw
@@ -2645,6 +2649,7 @@ def test_number():
     assert number.qb2 == nqb2
     assert number.num == num == number.sn
     assert number.numh == numh == number.snh
+    assert number.onkey == '0000000000000000000000000000ffff'
     assert number.positive
     bs = ceil((len(number.code) * 3) / 4)
     assert number.qb2[bs:] == number.raw
@@ -2657,6 +2662,7 @@ def test_number():
     assert number.qb2 == nqb2
     assert number.num == num
     assert number.numh == numh
+    assert number.onkey == '0000000000000000000000000000ffff'
     assert number.positive
     bs = ceil((len(number.code) * 3) / 4)
     assert number.qb2[bs:] == number.raw
@@ -2669,6 +2675,7 @@ def test_number():
     assert number.qb2 == nqb2
     assert number.num == num == number.sn
     assert number.numh == numh == number.snh
+    assert number.onkey == '0000000000000000000000000000ffff'
     assert number.positive
     bs = ceil((len(number.code) * 3) / 4)
     assert number.qb2[bs:] == number.raw
@@ -2681,6 +2688,7 @@ def test_number():
     assert number.qb2 == nqb2
     assert number.num == num == number.sn
     assert number.numh == numh == number.snh
+    assert number.onkey == '0000000000000000000000000000ffff'
     assert number.positive
     bs = ceil((len(number.code) * 3) / 4)
     assert number.qb2[bs:] == number.raw
@@ -2693,6 +2701,7 @@ def test_number():
     assert number.qb2 == nqb2
     assert number.num == num
     assert number.numh == numh
+    assert number.onkey == '0000000000000000000000000000ffff'
     assert number.positive
     bs = ceil((len(number.code) * 3) / 4)
     assert number.qb2[bs:] == number.raw
@@ -2705,6 +2714,7 @@ def test_number():
     assert number.qb2 == nqb2
     assert number.num == num
     assert number.numh == numh
+    assert number.onkey == '0000000000000000000000000000ffff'
     assert number.positive
     bs = ceil((len(number.code) * 3) / 4)
     assert number.qb2[bs:] == number.raw
@@ -2717,6 +2727,7 @@ def test_number():
     assert number.qb2 == nqb2
     assert number.num == num
     assert number.numh == numh
+    assert number.onkey == '0000000000000000000000000000ffff'
     assert number.positive
     bs = ceil((len(number.code) * 3) / 4)
     assert number.qb2[bs:] == number.raw
@@ -2729,6 +2740,7 @@ def test_number():
     assert number.qb2 == nqb2
     assert number.num == num
     assert number.numh == numh
+    assert number.onkey == '0000000000000000000000000000ffff'
     assert number.positive
     bs = ceil((len(number.code) * 3) / 4)
     assert number.qb2[bs:] == number.raw
@@ -2956,6 +2968,7 @@ def test_number():
     assert number.qb2 == nqb2
     assert number.num == num
     assert number.numh == numh
+    assert number.onkey == '0000ffffffffffffffffffffffffffff'
     assert number.positive
     bs = ceil((len(number.code) * 3) / 4)
     assert number.qb2[bs:] == number.raw
@@ -3031,6 +3044,8 @@ def test_number():
     assert number.qb2[bs:] == number.raw
     with pytest.raises(InvalidValueError):
         number.huge  # too big for huge
+    with pytest.raises(InvalidValueError):
+        number.onkey  # too big for onkey
 
     number = Number(numh=numh)
     assert number.code == code
@@ -3073,8 +3088,6 @@ def test_number():
     assert number.qb2[bs:] == number.raw
     with pytest.raises(InvalidValueError):
         number.huge  # too big for huge
-
-
 
     number = Number(raw=raw, code=code)
     assert number.code == code
@@ -6598,7 +6611,7 @@ def test_saider():
 
     # Load from vaccuous dict
     label = Saids.d
-    vs = versify(pvrsn=Version, kind=kind, size=0)  # vaccuous size == 0
+    vs = versify(pvrsn=Vrsn_1_0, kind=kind, size=0)  # vaccuous size == 0
     assert vs == 'KERI10JSON000000_'
     sad4 = dict(
         v=vs,
@@ -6678,7 +6691,7 @@ def test_saider():
     assert saider.verify(sad8, prefixed=True)
 
     # verify gets kind from version string if provided when loading from dict
-    vs = versify(pvrsn=Version, kind=Kinds.mgpk, size=0)  # vaccuous size == 0
+    vs = versify(pvrsn=Vrsn_1_0, kind=Kinds.mgpk, size=0)  # vaccuous size == 0
     assert vs == 'KERI10MGPK000000_'
     sad9 = dict(sad4)
     sad9['v'] = vs

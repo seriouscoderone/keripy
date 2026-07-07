@@ -14,7 +14,7 @@ from ..kering import (Vrsn_1_0, Vrsn_2_0, Ilks,
                       ValidationError, MissingSignatureError)
 from ..core import (Counter, Pather, Dater, Diger,
                     Prefixer, Seqner, Saider,
-                    Noncer, Sadder, SerderKERI,
+                    Noncer, Sadder, Serder, SerderKERI,
                     NonTransDex, Saids, Codens,
                     verifySigs)
 from ..db import fetchTsgs
@@ -401,8 +401,8 @@ def exchangeOld(*,
         embeds = embeds if embeds is not None else {}
         e = dict()
         for label, msg in embeds.items():
-            serder = Sadder(raw=msg)
-            e[label] = serder.ked
+            serder = Serder(raw=msg)
+            e[label] = serder.sad
             atc = bytes(msg[serder.size:])
             if not atc:
                 continue
@@ -536,8 +536,8 @@ def specialExchange(*,
         e = dict()
 
         for label, msg in embeds.items():
-            serder = Sadder(raw=msg)
-            e[label] = serder.ked
+            serder = Serder(raw=msg)
+            e[label] = serder.sad
             atc = bytes(msg[serder.size:])
             if not atc:
                 continue
@@ -622,7 +622,7 @@ def cloneMessage(hby, said):
 def serializeMessage(hby, said, framed=False):
     """Fetch message and attachments from hby.db by said and then serialize them
 
-    Parameters::
+    Parameters:
         hby (Habery): environment with db
         said (str): of message
         framed (bool): True means may assume each message plus its attachments
@@ -632,7 +632,7 @@ def serializeMessage(hby, said, framed=False):
                             is isolated as frame when parsing so do need
                             attachment group when messagizing
 
-    Returns::
+    Returns:
         msg (bytearray):  message by said with attachments
 
     """

@@ -139,9 +139,9 @@ class Parser:
     Methods[2][0][Codens.NonTransReceiptCouples] = "_NonTransReceiptCouples2"
     Methods[2][0][Codens.BigNonTransReceiptCouples] = "_NonTransReceiptCouples2"
 
-    Methods[1][0][Codens.TransReceiptQuadruples] = "_TransReceiptQuadruples1"
-    Methods[2][0][Codens.TransReceiptQuadruples] = "_TransReceiptQuadruples2"
-    Methods[2][0][Codens.BigTransReceiptQuadruples] = "_TransReceiptQuadruples2"
+    Methods[1][0][Codens.TransReceiptIdxSigGroups] = "_TransReceiptQuadruples1"
+    Methods[2][0][Codens.TransReceiptIdxSigGroups] = "_TransReceiptQuadruples2"
+    Methods[2][0][Codens.BigTransReceiptIdxSigGroups] = "_TransReceiptQuadruples2"
 
     Methods[1][0][Codens.TransIdxSigGroups] = "_TransIdxSigGroups1"
     Methods[2][0][Codens.TransIdxSigGroups] = "_TransIdxSigGroups2"
@@ -551,15 +551,15 @@ class Parser:
             except SizedGroupError as ex:  # error inside sized group
                 # processOneIter already flushed group so do not flush stream
                 if logger.isEnabledFor(logging.DEBUG):
-                    logger.exception("Parser sized group error: %s", ex.args[0])
+                    logger.exception("Parser sized group error: %s", ex)
                 else:
-                    logger.error("Parser sized group error: %s", ex.args[0])
+                    logger.error("Parser sized group error: %s", ex)
 
             except (ColdStartError, ExtractionError) as ex:  # some extraction error
                 if logger.isEnabledFor(logging.DEBUG):
-                    logger.exception("Parser msg extraction error: %s", ex.args[0])
+                    logger.exception("Parser msg extraction error: %s", ex)
                 else:
-                    logger.error("Parser msg extraction error: %s", ex.args[0])
+                    logger.error("Parser msg extraction error: %s", ex)
                 del ims[:]  # delete rest of stream to force cold restart
 
             except (ValidationError, Exception) as ex:  # non Extraction Error
@@ -635,15 +635,15 @@ class Parser:
             except SizedGroupError as ex:  # error inside sized group
                 # processOneIter already flushed group so do not flush stream
                 if logger.isEnabledFor(logging.DEBUG):
-                    logger.exception("Kevery sized group error: %s", ex.args[0])
+                    logger.exception("Kevery sized group error: %s", ex)
                 else:
-                    logger.error("Kevery sized group error: %s", ex.args[0])
+                    logger.error("Kevery sized group error: %s", ex)
 
             except (ColdStartError, ExtractionError, Exception) as ex:  # some extraction error
                 if logger.isEnabledFor(logging.DEBUG):
-                    logger.exception("Kevery msg extraction error: %s", ex.args[0])
+                    logger.exception("Kevery msg extraction error: %s", ex)
                 else:
-                    logger.error("Kevery msg extraction error: %s", ex.args[0])
+                    logger.error("Kevery msg extraction error: %s", ex)
                 del ims[:]  # delete rest of stream to force cold restart
 
             if processive:
@@ -744,24 +744,24 @@ class Parser:
             except SizedGroupError as ex:  # error inside sized group
                 # processOneIter already flushed group so do not flush stream
                 if logger.isEnabledFor(logging.DEBUG):
-                    logger.exception("Parser sized group error: %s", ex.args[0])
+                    logger.exception("Parser sized group error: %s", ex)
                 else:
-                    logger.error("Parser sized group error: %s", ex.args[0])
+                    logger.error("Parser sized group error: %s", ex)
 
             except (ColdStartError, ExtractionError) as ex:  # some extraction error
                 if logger.isEnabledFor(logging.DEBUG):
-                    logger.exception("Parser msg extraction error: %s", ex.args[0])
+                    logger.exception("Parser msg extraction error: %s", ex)
                 else:
-                    logger.error("Parser msg extraction error: %s", ex.args[0])
+                    logger.error("Parser msg extraction error: %s", ex)
                 del ims[:]  # delete rest of stream to force cold restart
 
             except (ValidationError, Exception) as ex:  # non Extraction Error
                 # Non extraction errors happen after successfully extracted from stream
                 # so we don't flush rest of stream just resume
                 if logger.isEnabledFor(logging.TRACE):
-                    logger.exception("Parser msg non-extraction error: %s", ex.args[0])
+                    logger.exception("Parser msg non-extraction error: %s", ex)
                 if logger.isEnabledFor(logging.DEBUG):
-                    logger.error("Parser msg non-extraction error: %s", ex.args[0])
+                    logger.error("Parser msg non-extraction error: %s", ex)
             yield
 
         return result  # should never return
@@ -956,7 +956,7 @@ class Parser:
                 sigers (list[Siger]): ControllerIdxSigs
                 wigers (list[Siger]): WitnessIdxSigs
                 cigars (list[Cigar]): NonTransReceiptCouples cigar with verfer from (pre+sig)
-                trqs   (list[TransLastReceipts]): TransReceiptQuadruples TransLastReceiptIdxSigGroups (prefixer, number, diger, siger)
+                trqs   (list[TransReceiptQuadruples]): TransReceiptQuadruples TransLastReceiptIdxSigGroups (prefixer, number, diger, siger)
                 tsgs   (list[TransSigs]):TransIdxSigGroups (prefixer, number, diger, [Sigers])
                 lsgs   (list[TransLastSigs]): TransLastIdxSigGroups (prefixer,[Sigers]) (was tsgs)
                 frcs   (list[FirstSeen]): FirstSeenReplayCouples (number, dater)
@@ -1016,7 +1016,7 @@ class Parser:
         exts = MsgParseDom() # asdict(MsgParseDom())
         exts.local = local
 
-        serdery = Serdery(version=Version)
+        serdery = Serdery(version=self.version)
 
 
         try:

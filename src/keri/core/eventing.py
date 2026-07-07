@@ -51,6 +51,8 @@ MaxIntThold = 2 ** 32 - 1
 # Location of last establishment key event: sn is int, dig is qb64 digest
 LastEstLoc = namedtuple("LastEstLoc", 's d')
 
+Kind = Kinds.cesr
+
 
 # Future make Cues dataclasses  instead of dicts. Dataclasses so may be converted
 # to/from dicts easily  example: dict(kin="receipt", serder=serder)
@@ -410,7 +412,7 @@ def state(pre,
           cnfg=None,  # default to []
           dpre=None,
           version=Version,
-          kind=Kinds.json,
+          kind=Kind,
           intive = False,
           ):
     """
@@ -564,7 +566,7 @@ def incept(keys,
            version=Version,
            pvrsn=None,
            gvrsn=None,
-           kind=Kinds.cesr,
+           kind=Kind,
            code=None,
            intive=False,
            delpre=None,
@@ -725,7 +727,7 @@ def rotate(pre,
            version=Version,
            pvrsn=None,
            gvrsn=None,
-           kind=Kinds.cesr,
+           kind=Kind,
            intive = False,
            ):
     """
@@ -909,7 +911,7 @@ def interact(pre,
              version=Version,
              pvrsn=None,
              gvrsn=None,
-             kind=Kinds.cesr,
+             kind=Kind,
              ):
     """
     Returns serder of interaction event message.
@@ -958,7 +960,7 @@ def receipt(pre,
             version=Version,
             pvrsn=None,
             gvrsn=None,
-            kind=Kinds.cesr
+            kind=Kind
             ):
     """
     Returns serder of event receipt message. Used for both non-trans and trans
@@ -1003,7 +1005,7 @@ def query(pre="",
           version=Version,
           pvrsn=None,
           gvrsn=None,
-          kind=Kinds.json):
+          kind=Kind):
     """
     Returns serder of query 'qry' message.
     Utility function to automate creation of query messages.
@@ -1095,7 +1097,7 @@ def reply(pre="",
           version=Version,
           pvrsn=None,
           gvrsn=None,
-          kind=Kinds.json):
+          kind=Kind):
     """Returns serder of reply 'rpy' message.
     Utility function to automate creation of reply messages.
     Reply 'rpy' message is a SAD item with an associated derived SAID in its
@@ -1185,7 +1187,7 @@ def prod(pre="",
           version=Version,
           pvrsn=None,
           gvrsn=None,
-          kind=Kinds.json):
+          kind=Kind):
     """Prod message
 
     Returns:
@@ -1274,7 +1276,7 @@ def bare(pre="",
            version=Version,
            pvrsn=None,
            gvrsn=None,
-           kind=Kinds.json):
+           kind=Kind):
     """Bare message
 
 
@@ -1385,7 +1387,7 @@ def exchept(sender="",
             version=Vrsn_2_0,
             pvrsn=None,
             gvrsn=None,
-            kind=Kinds.json):
+            kind=Kind):
     """Utility function to automate creation of exchange incept, exchept, 'xip',
     message. The exchept 'xip' message is a SAD item with an associated derived
     SAID in its 'd' field.  Only defined for KERI v2.
@@ -1466,7 +1468,7 @@ def exchange(*,
              version=Version,
              pvrsn=None,
              gvrsn=None,
-             kind=Kinds.json,):
+             kind=Kind,):
     """ Create an `exn` message with the specified route and payload
 
     Parameters:
@@ -4555,20 +4557,30 @@ class Kevery:
                 # verify sigs and if so write receipt to database
                 sverfers = sserder.verfers
                 if not sverfers:
-                    raise ValidationError("Invalid receipter's est. event"
-                                          " dig = {}  from pre ={}, no keys."
-                                          "".format(sdiger.qb64, sprefixer.qb64))
+                    raise ValidationError(f"Invalid receipter's est. event"
+                                          f" dig={sdiger.qb64}  from pre="
+                                          f"{sprefixer.qb64}, no keys.")
 
                 for siger in sigers:  # endorser (non-controller) signatures
                     if siger.index >= len(sverfers):
-                        raise ValidationError("Index = {} to large for keys."
-                                              "".format(siger.index))
+                        raise ValidationError(f"Index={siger.index} to large for keys.")
+
                     siger.verfer = sverfers[siger.index]  # assign verfer
                     if siger.verfer.verify(siger.raw, lserder.raw):  # verify sig
                         # good sig so write receipt quadruple to database
                         quadruple = (sprefixer, snumber, sdiger, siger)
-                        self.db.vrcs.add(keys=dgKey(pre=pre, dig=ldig),
-                                       val=quadruple)  # dups kept
+                        self.db.vrcs.add(keys=(pre, ldig), val=quadruple)
+
+                # temporary for vrcsNew to see if works
+                for siger in sigers:  # endorser (non-controller) signatures
+                    if siger.index >= len(sverfers):
+                        raise ValidationError(f"Index={siger.index} to large for keys.")
+
+                    siger.verfer = sverfers[siger.index]  # assign verfer
+                    if siger.verfer.verify(siger.raw, lserder.raw):  # verify sig
+                        # good sig so write receipt to database
+                        keys = (pre, ldig, sprefixer.qb64, snumber.onkey, sdiger.qb64)
+                        self.db.vrcsNew.add(keys=keys, val=siger)
 
         else:  # no events to be receipted yet at that sn so escrow
             if cigars:
@@ -4907,7 +4919,11 @@ class Kevery:
 
                 # Set up quadruple
                 quadruple = (sprefixer, snumber, diger, siger)
-                self.db.vrcs.add(keys=dgKey(pre, serder.said), val=quadruple)
+                self.db.vrcs.add(keys=(pre, serder.said), val=quadruple)
+
+                # vrcsNew test to replace vrcs
+                keys = (pre, serder.said, sprefixer.qb64, snumber.onkey, diger.qb64)
+                self.db.vrcsNew.add(keys=keys, val=siger)
 
 
             else:  # escrow  either receiptor or receipted event not yet in database
@@ -5524,7 +5540,8 @@ class Kevery:
                 logger.debug("Query Body=\n%s\n", serder.pretty())
                 raise QueryNotFoundError(msg)
 
-            rserder = reply(route=f"/ksn/{src}", data=kever.state()._asdict())
+            rserder = reply(route=f"/ksn/{src}", data=kever.state()._asdict(),
+                            pre=pre, version=serder.pvrsn, kind=serder.kind)
             self.cues.push(dict(kin="reply", src=src, route="/ksn", serder=rserder,
                                 dest=dest))
 
@@ -7236,7 +7253,11 @@ class Kevery:
 
                     # good sig so write receipt quadruple to database
                     quadruple = (sprefixer, snumber, ssaider, siger)
-                    self.db.vrcs.add(keys=dgKey(pre, serder.said), val=quadruple)
+                    self.db.vrcs.add(keys=(pre, serder.said), val=quadruple)
+
+                    # vrcsNew test to replace vrcs
+                    keys = (pre, serder.said, sprefixer.qb64, snumber.onkey, ssaider.qb64)
+                    self.db.vrcsNew.add(keys=keys, val=siger)
 
 
                 except UnverifiedTransferableReceiptError as ex:
@@ -7465,6 +7486,20 @@ def loadEvent(db, preb, dig):
             ))
 
         receipts["transferable"] = trans
+
+    # new style trans receipts
+    receiptsNew = dict()
+    transNew = []
+    topkeys = (preb, dig)
+    for keys, siger in db.vrcsNew.getTopItemIter(keys=topkeys):
+        epre, edig, rpre, rsnh, rdig = keys  # expand keys tuple
+        transNew.append(dict(prefix=rpre,
+                             sequence=Number(snh=rsnh).qb64,
+                             said=rdig,
+                             signature=siger.qb64))
+    if transNew:
+        receiptsNew['transferable'] = transNew
+
 
     # add nontrans receipts couples
     if duple := db.rcts.get(keys=dgkey):
