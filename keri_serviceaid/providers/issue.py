@@ -21,7 +21,7 @@ from hio.base import doing
 from keri.core import coring, eventing, serdering
 from keri.core import signing as coresigning
 from keri.help import helping
-from keri.kering import Kinds
+from keri.kering import Kinds, Vrsn_1_0
 from keri.vdr import credentialing, verifying
 from keri.app import grouping, signing
 from keri.vc import protocoling
@@ -112,9 +112,14 @@ class IpexGrantIssuer:
                 source[ename] = {"n": edef["cred_said"], "s": edef["schema_said"]}
             _, source = coring.Saider.saidify(sad=source, kind=Kinds.json,
                                               label=coring.Saids.d)
+        # TRANSITIONAL: keripy v2 ACDC issuance is not implemented upstream
+        # (vc/proving.py:79 hardcodes the v1 `ri` label; the v2 SerderACDC rejects
+        # it). Hold the credential at v1 via the additive create(version=) seam.
+        # Lift as a unit when upstream ships v2 registry+IPEX.
         creder = credentialer.create(regname=registry_name, recp=recipient,
                                      schema=schema_said, source=source,
-                                     rules=rules, data=attributes, private=False)
+                                     rules=rules, data=attributes, private=False,
+                                     version=Vrsn_1_0)
         dt = creder.attrib.get("dt", timestamp)
         registry = rgy.registryByName(registry_name)
         iserder = registry.issue(said=creder.said, dt=dt)
@@ -187,8 +192,11 @@ def _frame_grant(hby, hab, rgy, said, recp, message, timestamp) -> bytearray:
     serder = hby.db.fetchLastSealingEventByEventSeal(
         creder.sad["i"], seal=dict(i=iserder.pre, s=sq.snh, d=iserder.said))
     anc = hby.db.cloneEvtMsg(pre=serder.pre, fn=0, dig=serder.said)
+    # TRANSITIONAL v1 hold: pin the grant exn to v1 (pvrsn) so it stays JSON with
+    # v1 embed framing (v2 CESR-native forbids pathed embeds). Lift with v2 IPEX.
     exn, atc = protocoling.ipexGrantExn(hab=hab, recp=recp, message=message,
-                                        acdc=acdc, iss=iss, anc=anc, dt=timestamp)
+                                        acdc=acdc, iss=iss, anc=anc, dt=timestamp,
+                                        pvrsn=Vrsn_1_0)
     msg = bytearray(exn.raw)
     msg.extend(atc)
     return msg
@@ -211,8 +219,10 @@ def _frame_revoke(hby, hab, rgy, said, recp, message, timestamp) -> bytearray:
     serder = hby.db.fetchLastSealingEventByEventSeal(
         creder.sad["i"], seal=dict(i=rserder.pre, s=sq.snh, d=rserder.said))
     anc = hby.db.cloneEvtMsg(pre=serder.pre, fn=0, dig=serder.said)
+    # TRANSITIONAL v1 hold: pin the grant exn to v1 (pvrsn), matching _frame_grant.
     exn, atc = protocoling.ipexGrantExn(hab=hab, recp=recp, message=message,
-                                        acdc=acdc, iss=rev, anc=anc, dt=timestamp)
+                                        acdc=acdc, iss=rev, anc=anc, dt=timestamp,
+                                        pvrsn=Vrsn_1_0)
     msg = bytearray(exn.raw)
     msg.extend(atc)
     return msg

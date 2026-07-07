@@ -37,7 +37,7 @@ def test_grant_shape_is_ipex_grant_exn():
     parsing.Parser(kvy=hby.kvy, version=Vrsn_1_0).parse(ims=bytearray(rcp.replay()))
     hby.kvy.processEscrows()
 
-    rgy = credentialing.Regery(hby=hby, name="svc")
+    rgy = credentialing.Regery(hby=hby, name="svc", temp=True)
     ctx = Context(hby=hby, hab=hab, rgy=rgy, registry_name="svc")
     reply = Reply.acdc(recipient=rcp.pre, attributes={"data": "cool"})
     reply.schema_said = schemer.said

@@ -861,7 +861,8 @@ class Credentialer(doing.DoDoer):
         super(Credentialer, self).__init__(doers=doers)
 
     def create(self, regname, recp: str, schema, source, rules, data, private: bool = False,
-               private_credential_nonce: Optional[str] = None, private_subject_nonce: Optional[str] = None):
+               private_credential_nonce: Optional[str] = None, private_subject_nonce: Optional[str] = None,
+               version=None):
         """  Create and validate a credential returning the fully populated Creder
 
         Parameters:
@@ -888,6 +889,12 @@ class Credentialer(doing.DoDoer):
             raise ConfigurationError("Credential registry {} does not exist.  It must be created before issuing "
                                             "credentials".format(regname))
 
+        # Additive version passthrough: default None => proving.credential uses its
+        # own default (prior behavior preserved for all existing callers). A caller
+        # holding v1 during the KERI v2 transition passes version=Vrsn_1_0 so the
+        # ACDC carries the v1 `ri` registry field instead of v2 `rd` (keripy's v2
+        # ACDC issuance path is not implemented yet).
+        _vkw = {} if version is None else {"version": version}
         creder = credential(issuer=registry.hab.pre,
                             schema=schema,
                             recipient=recp,
@@ -897,7 +904,8 @@ class Credentialer(doing.DoDoer):
                             private_credential_nonce=private_credential_nonce,
                             private_subject_nonce=private_subject_nonce,
                             rules=rules,
-                            status=registry.regk)
+                            status=registry.regk,
+                            **_vkw)
         self.validate(creder)
         return creder
 
