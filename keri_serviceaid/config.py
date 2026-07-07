@@ -17,6 +17,7 @@ class Config:
     region: str = "us-east-1"
     endpoint_url: str | None = None
     secret_endpoint_url: str | None = None
+    cas_bucket: str = ""
 
     @property
     def kel_namespace(self) -> str:
@@ -25,6 +26,10 @@ class Config:
     @property
     def tel_namespace(self) -> str:
         return f"{self.alias}:tel"
+
+    @property
+    def pub_namespace(self) -> str:
+        return f"{self.alias}:pub"
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -44,4 +49,5 @@ class Config:
             region=os.environ.get("SERVICEAID_REGION", "us-east-1"),
             endpoint_url=os.environ.get("SERVICEAID_ENDPOINT_URL") or None,
             secret_endpoint_url=os.environ.get("SERVICEAID_SECRET_ENDPOINT_URL") or None,
+            cas_bucket=os.environ.get("SERVICEAID_CAS_BUCKET", ""),
         )
