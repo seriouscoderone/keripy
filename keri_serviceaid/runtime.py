@@ -190,6 +190,13 @@ def init(cfg: Config | None = None) -> RuntimeState:
 
     _wire_default_providers(svc, db=db)
 
+    if svc.artifact_store is None and cfg.cas_bucket:
+        from keri_serviceaid.providers.artifact_store import S3ArtifactStore
+        pubdb = DynamoDBer.open(name=cfg.alias, stores=["pub."],
+                                table_name=cfg.core_table,
+                                namespace=cfg.pub_namespace, **kwa)
+        svc.artifact_store = S3ArtifactStore(bucket=cfg.cas_bucket, db=pubdb)
+
     # Register the dev's ACDC schemas so Credentialer.create can validate.
     from keri.core import scheming
     from keri.kering import Kinds

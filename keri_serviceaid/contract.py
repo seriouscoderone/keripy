@@ -104,7 +104,8 @@ class ServiceAid:
 
     def __init__(self, *, alias: str, witnesses: list[str] | None = None,
                  toad: int = 0, authz=None, verifier=None, resolver=None,
-                 issuer=None, deliverer=None, idempotency=None):
+                 issuer=None, deliverer=None, idempotency=None,
+                 artifact_store=None):
         self.alias = alias
         self.witnesses = witnesses or []
         self.toad = toad
@@ -114,6 +115,7 @@ class ServiceAid:
         self.issuer = issuer
         self.deliverer = deliverer
         self.idempotency = idempotency
+        self.artifact_store = artifact_store
         self._commands: dict[str, Command] = {}
         self.schemas: list[dict] = []   # ACDC schema SADs to register at init
 

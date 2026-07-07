@@ -77,6 +77,9 @@ class LocalRuntime:
             svc.deliverer = PostmanDeliverer()
         if svc.idempotency is None:
             svc.idempotency = idempotency or LMDBLedger(hby.db)
+        if svc.artifact_store is None:
+            from keri_serviceaid.providers.artifact_store import LocalArtifactStore
+            svc.artifact_store = LocalArtifactStore()
         if svc.authz is None:
             svc.authz = CredentialGate(hby=hby, reger=rgy.reger, svc=svc,
                                        base=Allowlist(base_authz or []))
