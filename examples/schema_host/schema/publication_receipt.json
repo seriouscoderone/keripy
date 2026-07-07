@@ -39,7 +39,7 @@
             }
           },
           "additionalProperties": false,
-          "required": ["d", "i", "dt", "schemaSaid", "publisher", "firstSeen"]
+          "required": ["d", "i", "dt", "schemaSaid", "schemaKind", "publisher", "firstSeen"]
         }
       ]
     }

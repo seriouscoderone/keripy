@@ -17,3 +17,6 @@ def test_publication_receipt_schema_saidifies_and_has_attributes():
     for field in ("schemaSaid", "schemaKind", "publisher", "firstSeen",
                   "priorContributor", "origin", "dt"):
         assert field in props
+    # verify required fields include those always produced by the pipeline
+    required = a["oneOf"][1]["required"]
+    assert set(required) >= {"schemaSaid", "schemaKind", "publisher", "firstSeen", "d", "i", "dt"}
