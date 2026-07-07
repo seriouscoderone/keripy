@@ -695,6 +695,11 @@ class DynamoDBer:
         publisher to anchor a given SAID").  No first-seen / attribution /
         publisher semantics are baked in here.
         """
+        if not key:
+            raise KeyError(
+                f"Key: `{key}` is either empty, too big (for lmdb), "
+                "or wrong DUPFIXED size. ref) lmdb.BadValsizeError"
+            )
         db = self._stores[name]
         claimed = self._put_item(db, key, _SK_SINGLE, bytes(val),
                                  condition="attribute_not_exists(PK)",
