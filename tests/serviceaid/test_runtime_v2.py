@@ -109,4 +109,10 @@ def test_cross_habery_oracle_read_kever_visible():
         assert ksr is not None and ksr.i == pre, (
             f"producer key-state not visible to service-B via the shared oracle "
             f"namespace (prefix={pre!r})")
+        # Flip side of the same invariant: the per-witness receipt/event WRITE-logs
+        # (including the v2 vrcsNew store) are NOT pooled, so each witness keeps its
+        # own receipts and keri.app.agenting.Receiptor can converge toad-of-N. A
+        # future edit that pools any of these must fail here loudly.
+        assert {"vrcs.", "vrcsnew.", "wigs.", "rcts.", "evts.", "sigs."}.isdisjoint(
+            SHARED_KEL_STORES)
         dbA.close(); dbB.close()
