@@ -92,6 +92,17 @@ class Regery:
             reg = Registry(hab=hab, reger=self.reger, tvy=self.tvy, psr=self.psr,
                            name=name, regk=regk, cues=self.cues)
 
+            # Repopulate vcp/regd from the stored registry-inception TEL event.
+            # loadRegistries previously left vcp=None; upstream's v2 Registry.issue()
+            # reads self.vcp.pvrsn/self.vcp.kind (issueEvent version=...), so a
+            # cold-started process that LOADS (rather than makes) its registry and
+            # then issues would raise AttributeError. Reconstruct the inception serder
+            # the same way Tever does (SerderKERI over the raw TEL event). Guard on the
+            # dig so a registry whose inception is not yet stored stays vcp=None.
+            if (dig := self.reger.tels.get(keys=regk, on=0)) is not None:
+                reg.vcp = SerderKERI(raw=bytes(self.reger.cloneTvt(regk, dig)))
+                reg.regd = reg.vcp.said
+
             reg.inited = True
             self.regs[regk] = reg
             self.reger.registries.add(regk)
