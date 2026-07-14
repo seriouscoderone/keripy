@@ -47,7 +47,7 @@ clients collected 1-of-5 until the set was narrowed.)
 
 ## KERI communication model — read before touching witnessing / receipts
 
-**Field guide: `~/code/KERI-COMMUNICATION-MODEL.md`** (the canonical doc — TL;DR + 11 sections).
+**Field guide: `~/code/ugard/docs/canon/keri-communication-model.md`** (the canonical doc — TL;DR + 11 sections).
 Load-bearing rules: a witness `/` event POST returns **`204`**; the receipt comes via the synchronous
 **`/receipts`** endpoint (`agenting.Receiptor`) or a mailbox SSE poll — never on the event POST.
 `agenting.WitnessReceiptor` encodes the direct-mode TCP push model and **hangs over HTTP/Lambda**.
