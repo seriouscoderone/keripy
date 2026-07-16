@@ -45,6 +45,23 @@ class Issuer(Protocol):
         ...
 
 
+def _build_edge_source(edges: dict) -> dict:
+    """Build the `e` block's per-edge source entries from edge defs.
+
+    Each edge def carries `cred_said` (-> `n`) and `schema_said` (-> `s`).
+    ACDC's default unary edge operator is I2I; when the def specifies a
+    non-default `op` (e.g. NI2I for a self-issued/no-issuee edge target),
+    that operator is surfaced as `o`. Absent `op`, `o` is omitted entirely
+    so default I2I semantics apply implicitly per the ACDC spec."""
+    source = {}
+    for ename, edef in edges.items():
+        entry = {"n": edef["cred_said"], "s": edef["schema_said"]}
+        if "op" in edef:
+            entry["o"] = edef["op"]
+        source[ename] = entry
+    return source
+
+
 def ensure_registry(hby, hab, rgy, *, name: str):
     """Return the registry for `name`, creating it (no backers) if absent.
     The inception Custom Resource creates it exactly once at deploy time; this
@@ -108,8 +125,7 @@ class IpexGrantIssuer:
         source = None
         if edges:
             source = dict(d="")
-            for ename, edef in edges.items():
-                source[ename] = {"n": edef["cred_said"], "s": edef["schema_said"]}
+            source.update(_build_edge_source(edges))
             _, source = coring.Saider.saidify(sad=source, kind=Kinds.json,
                                               label=coring.Saids.d)
         # TRANSITIONAL: keripy v2 ACDC issuance is not implemented upstream
