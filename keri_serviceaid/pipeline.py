@@ -1,7 +1,13 @@
-"""The per-inbound compose: verify-tier → dispatch → idempotency → authorize →
-compute → branch. Pure logic; every side effect goes through an injected provider
-on `state.svc`. v1 ships GRANT on success + SILENCE on every other outcome
-(deny / reject / none / unknown route / bad sig / compute-raise → log, no reply).
+"""The per-inbound compose: dispatch → verify(effective tier) → idempotency →
+authorize → compute → branch. Pure logic; every side effect goes through an
+injected provider on `state.svc`. v1 ships GRANT on success + SILENCE on every
+other outcome (deny / reject / none / unknown route / bad sig / compute-raise
+→ log, no reply).
+
+Dispatch runs before verify so the command's `min_assurance_tier` (if any) is
+known when computing the effective tier = max(deploy floor, command min) —
+see `providers.verify.max_tier`. An unknown route therefore drops before
+verification ever runs (no oracle lookup for a route with no handler).
 
 Ordering of exactly-once issuance + idempotent re-delivery is load-bearing:
 record(said, grant) happens AFTER issue but BEFORE deliver, so a delivery failure
@@ -23,18 +29,22 @@ def process(state, serder, attachments) -> None:
     route = serder.ked["r"]
     said = serder.said
 
-    # 1. Verify the sender's assurance tier against the oracle key state.
-    try:
-        key_state = svc.verifier.verify(sender, attachments, state.hby)
-    except VerificationError as exc:
-        logger.warning("verification failed for %s on %s: %s — silent drop",
-                       sender, route, exc)
-        return
-
-    # 2. Dispatch by the SIGNED `r`. No command → no behavior → no reply.
+    # 1. Dispatch by the SIGNED `r`. No command → no behavior → no reply.
+    #    Looked up first so we know its assurance floor before verifying.
     cmd = svc.lookup(route)
     if cmd is None:
         logger.info("no command for route %s — silent drop", route)
+        return
+
+    # 2. Verify the sender's assurance tier against the oracle key state, at
+    #    the effective tier = max(deploy floor, command's min_assurance_tier).
+    try:
+        key_state = svc.verifier.verify(
+            sender, attachments, state.hby,
+            min_tier=getattr(cmd, "min_assurance_tier", None))
+    except VerificationError as exc:
+        logger.warning("verification failed for %s on %s: %s — silent drop",
+                       sender, route, exc)
         return
 
     # 3. Idempotency: a replay re-delivers the recorded grant, never re-issues.

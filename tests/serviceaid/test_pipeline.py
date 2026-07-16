@@ -14,10 +14,10 @@ class FakeVerifier:
     def __init__(self, raise_=False):
         self.raise_ = raise_
 
-    def verify(self, sender, ims, hby):
+    def verify(self, sender, ims, hby, *, min_tier=None):
         if self.raise_:
             raise VerificationError("tier unmet")
-        return KeyState(pre=sender, tier="receipts")
+        return KeyState(pre=sender, tier=min_tier or "receipts")
 
 
 class FakeAuthz:
