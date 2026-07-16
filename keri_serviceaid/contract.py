@@ -94,6 +94,7 @@ class Command:
     issues: str                       # ACDC schema SAID this command may issue
     fn: Callable[[Request], Reply]
     requires_credential: Optional[CredentialReq] = None
+    min_assurance_tier: Optional[str] = None   # None -> use the deploy floor
 
 
 class ServiceAid:
@@ -121,17 +122,21 @@ class ServiceAid:
 
     def command(self, *, route: str, issues: str = "",
                 payload_schema: dict | None = None,
-                requires_credential: Optional["CredentialReq"] = None):
+                requires_credential: Optional["CredentialReq"] = None,
+                min_assurance_tier: Optional[str] = None):
         if route.startswith("/ipex/"):
             raise ValueError(f"route {route!r} is reserved: /ipex/* is owned by "
                              "the IPEX protocol and may not be a command route")
+        if min_assurance_tier is not None and min_assurance_tier not in ("signed", "receipts", "watcher"):
+            raise ValueError(f"unknown min_assurance_tier {min_assurance_tier!r}")
 
         def deco(fn: Callable[[Request], Reply]):
             if route in self._commands:
                 raise ValueError(f"duplicate route registered: {route}")
             self._commands[route] = Command(route=route, payload_schema=payload_schema,
                                              issues=issues, fn=fn,
-                                             requires_credential=requires_credential)
+                                             requires_credential=requires_credential,
+                                             min_assurance_tier=min_assurance_tier)
             return fn
         return deco
 

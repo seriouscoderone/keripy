@@ -22,9 +22,22 @@ class KeyState:
     sn: int = 0
 
 
+TIER_ORDER = {"signed": 0, "receipts": 1, "watcher": 2}
+
+
+def max_tier(a: str, b: str | None) -> str:
+    """The stricter of two tiers (b=None -> a). Raises on an unknown tier."""
+    for t in (a, b):
+        if t is not None and t not in TIER_ORDER:
+            raise ValueError(f"unknown verifier tier {t!r}")
+    if b is None:
+        return a
+    return a if TIER_ORDER[a] >= TIER_ORDER[b] else b
+
+
 @runtime_checkable
 class Verifier(Protocol):
-    def verify(self, sender: str, ims: bytes, hby) -> KeyState:
+    def verify(self, sender: str, ims: bytes, hby, *, min_tier: str | None = None) -> KeyState:
         """Assert the assurance tier of `sender`'s key state; raise
         VerificationError if unmet. Returns the resolved KeyState."""
         ...
@@ -43,8 +56,9 @@ class OracleVerifier:
             raise ValueError(f"unknown verifier tier {tier!r}")
         self.tier = tier
 
-    def verify(self, sender: str, ims: bytes, hby) -> KeyState:
-        if self.tier == "watcher":
+    def verify(self, sender: str, ims: bytes, hby, *, min_tier: str | None = None) -> KeyState:
+        tier = max_tier(self.tier, min_tier)   # raises ValueError on unknown min_tier
+        if tier == "watcher":
             raise NotImplementedError(
                 "watcher (tier-3) verification is a named follow-on (keri_cdk "
                 "watcher seam); use tier 'signed' or 'receipts'")
@@ -57,10 +71,13 @@ class OracleVerifier:
 
         sn = getattr(kever, "sn", 0)
         wits = getattr(kever, "wits", []) or []
-        if self.tier == "receipts" and wits:
+        # tier 'receipts' MEANING is M-of-N/TOAD agreement (the duplicity check, per
+        # docs/canon/keri-trust-and-verification.md). INTERIM: presence-of->=1 receipt;
+        # full M-of-N/TOAD lands with the watcher-tier work (tracked follow-up).
+        if tier == "receipts" and wits:
             # Witnessed AID: require at least one witness receipt in the oracle.
             if hby.db.wigs.getLast(keys=(sender,)) is None:
                 raise VerificationError(
                     f"{sender} is witnessed but has no witness receipts in the "
                     "oracle — tier 'receipts' unmet (strict default)")
-        return KeyState(pre=sender, tier=self.tier, sn=sn)
+        return KeyState(pre=sender, tier=tier, sn=sn)
