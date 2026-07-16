@@ -1,5 +1,5 @@
 import pytest
-from keri_serviceaid import OracleVerifier, KeyState, VerificationError
+from keri_serviceaid import ServiceAid, OracleVerifier, KeyState, VerificationError
 from keri_serviceaid.providers.verify import TIER_ORDER, max_tier
 
 
@@ -48,3 +48,33 @@ def test_unknown_min_tier_rejected():
     hby = FakeHby("EReq")
     with pytest.raises(ValueError, match="unknown"):
         OracleVerifier(tier="signed").verify("EReq", b"", hby, min_tier="bogus")
+
+
+def test_command_records_min_assurance_tier():
+    svc = ServiceAid(alias="rating-engine")
+
+    @svc.command(route="/rate", issues="Equote", min_assurance_tier="receipts")
+    def rate(req):
+        ...
+
+    cmd = svc.lookup("/rate")
+    assert cmd.min_assurance_tier == "receipts"
+
+
+def test_command_min_assurance_tier_defaults_none():
+    svc = ServiceAid(alias="rating-engine")
+
+    @svc.command(route="/ping")
+    def ping(req):
+        ...
+
+    assert svc.lookup("/ping").min_assurance_tier is None
+
+
+def test_command_unknown_min_assurance_tier_rejected():
+    svc = ServiceAid(alias="rating-engine")
+
+    with pytest.raises(ValueError):
+        @svc.command(route="/rate", issues="Equote", min_assurance_tier="platinum")
+        def rate(req):
+            ...

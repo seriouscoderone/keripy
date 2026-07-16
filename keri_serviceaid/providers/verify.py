@@ -27,6 +27,8 @@ TIER_ORDER = {"signed": 0, "receipts": 1, "watcher": 2}
 
 def max_tier(a: str, b: str | None) -> str:
     """The stricter of two tiers (b=None -> a). Raises on an unknown tier."""
+    if a is None:
+        raise ValueError("max_tier requires a non-None tier for 'a'")
     for t in (a, b):
         if t is not None and t not in TIER_ORDER:
             raise ValueError(f"unknown verifier tier {t!r}")
