@@ -12,7 +12,7 @@ from base64 import urlsafe_b64encode as encodeB64
 
 from hio.help import ogler
 
-from ..kering import (Colds, sniff, Vrsn_2_0, Version, Ilks,
+from ..kering import (Colds, sniff, Versionage, Vrsn_1_0, Vrsn_2_0, Version, Ilks,
                       UnexpectedCountCodeError, MaterialError, ValidationError,
                       QueryNotFoundError, ExtractionError, ShortageError,
                       ColdStartError, InvalidVersionError,
@@ -265,6 +265,31 @@ class Parser:
             self._sucodes = self.SUCodes[version.major][latest]
             self._mucodes = self.MUCodes[version.major][latest]
             self._bucodes = self.BUCodes[version.major][latest]
+
+
+    @staticmethod
+    def _attachmentGroupVersion(code):
+        """Returns the Versionage of a supported CESR genus whose AttachmentGroup
+        or BigAttachmentGroup counter code equals ``code``, or None when ``code``
+        is not an AttachmentGroup framing code in any supported version.
+
+        The AttachmentGroup framing counter is universal, but its qb64 value is
+        not identical across genus-major versions (v1 uses '-V'/'--V' while v2
+        uses '-C'/'--C'), and the v1 value ('-V') collides with a v2 regular code
+        (BackerRegistrarSealCouples). This lets ``msgParsator`` recognize an
+        attachment enclosure serialized under a different genus version than the
+        message body -- e.g. the v1 AttachmentGroups that ``Baser.cloneEvtMsg``
+        (clone/replay, OOBI controller endpoint, mailbox) wraps around v2 KEL
+        events -- and switch the counter tables to that version for its contents.
+
+        Parameters:
+            code (str): qb64 counter code to test.
+        """
+        for major, minors in Counter.Codes.items():
+            for minor, codex in minors.items():
+                if code in (codex.AttachmentGroup, codex.BigAttachmentGroup):
+                    return Versionage(major=major, minor=minor)
+        return None
 
 
     @property
@@ -1196,6 +1221,35 @@ class Parser:
                                                  cold=cold,
                                                  abort=framed,
                                                  strip=False)
+
+                # Attachments may be enclosed in an AttachmentGroup serialized
+                # under a different CESR genus-major version than the message body.
+                # The clone/replay path (Baser.cloneEvtMsg -- served by a witness
+                # /oobi/{aid}/controller endpoint and by mailbox replay) encloses
+                # v1 '-V' AttachmentGroups around v2 KEL event bodies. The
+                # AttachmentGroup framing counter is universal, but its qb64 value
+                # is not identical across major versions (v1 '-V'/'--V' vs v2
+                # '-C'/'--C') and each value collides with an unrelated regular
+                # code in the other version (e.g. v1 '-C' NonTransReceiptCouples vs
+                # v2 '-C' AttachmentGroup). So only reinterpret ctr as a
+                # cross-version AttachmentGroup when its enclosed content begins
+                # with a counter (as a genuine group must), which distinguishes it
+                # from a same-valued regular content code whose payload is a bare
+                # primitive. Then switch the counter tables to the enclosure's own
+                # version; the finally: verstack restores the version afterwards.
+                agvrsn = self._attachmentGroupVersion(ctr.code)
+                if (agvrsn is not None and agvrsn != self.version
+                        and cold == Colds.txt):
+                    hs = ctr.byteSize(cold=cold)  # size of the counter itself
+                    if len(ims) > hs and ims[hs:hs + 1] == b'-':  # encloses a counter
+                        verstack.append(self.version)  # restored in finally
+                        self.version = agvrsn  # switch codes/methods to group genus
+                        ctr = yield from self._extractor(ims=ims,  # re-peek under it
+                                                         klas=Counter,
+                                                         cold=cold,
+                                                         abort=framed,
+                                                         strip=False)
+
                 if ctr.code in (self.codes.AttachmentGroup, self.codes.BigAttachmentGroup):
                     del ims[:ctr.byteSize(cold=cold)]  # consume ctr itself
                     # compute enclosing attachment group size based on txt or bny

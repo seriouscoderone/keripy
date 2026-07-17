@@ -412,7 +412,7 @@ def state(pre,
           cnfg=None,  # default to []
           dpre=None,
           version=Version,
-          kind=Kind,
+          kind=Kinds.json,
           intive = False,
           ):
     """
@@ -1005,7 +1005,9 @@ def query(pre="",
           version=Version,
           pvrsn=None,
           gvrsn=None,
-          kind=Kind):
+          kind=Kinds.json):  # query 'q' may carry a topics map whose route-like
+          # keys (e.g. '/receipt') are not valid native-CESR labels, so queries
+          # default to JSON (native CESR cannot represent such field maps).
     """
     Returns serder of query 'qry' message.
     Utility function to automate creation of query messages.
@@ -1097,7 +1099,7 @@ def reply(pre="",
           version=Version,
           pvrsn=None,
           gvrsn=None,
-          kind=Kind):
+          kind=Kinds.json):
     """Returns serder of reply 'rpy' message.
     Utility function to automate creation of reply messages.
     Reply 'rpy' message is a SAD item with an associated derived SAID in its
@@ -1187,7 +1189,7 @@ def prod(pre="",
           version=Version,
           pvrsn=None,
           gvrsn=None,
-          kind=Kind):
+          kind=Kinds.json):
     """Prod message
 
     Returns:
@@ -1276,7 +1278,7 @@ def bare(pre="",
            version=Version,
            pvrsn=None,
            gvrsn=None,
-           kind=Kind):
+           kind=Kinds.json):
     """Bare message
 
 
@@ -1387,7 +1389,7 @@ def exchept(sender="",
             version=Vrsn_2_0,
             pvrsn=None,
             gvrsn=None,
-            kind=Kind):
+            kind=Kinds.json):
     """Utility function to automate creation of exchange incept, exchept, 'xip',
     message. The exchept 'xip' message is a SAD item with an associated derived
     SAID in its 'd' field.  Only defined for KERI v2.
@@ -1468,7 +1470,7 @@ def exchange(*,
              version=Version,
              pvrsn=None,
              gvrsn=None,
-             kind=Kind,):
+             kind=Kinds.json,):
     """ Create an `exn` message with the specified route and payload
 
     Parameters:
