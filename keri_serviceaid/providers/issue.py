@@ -27,6 +27,7 @@ from keri.app import grouping, signing
 from keri.vc import protocoling
 
 from ..contract import Reply
+from ..progress import NullSink, ProgressSink
 
 
 @dataclass
@@ -92,6 +93,11 @@ class IpexGrantIssuer:
     """Default issuer: mints an ACDC of reply's schema to reply.recipient and
     returns a self-contained /ipex/grant exn (ACDC + iss + anchor)."""
 
+    def __init__(self, sink: ProgressSink | None = None):
+        # sink=None -> NullSink: no behavior change from this class's callers'
+        # point of view beyond the (no-op) sink calls below.
+        self._sink = sink or NullSink()
+
     def issue(self, reply: Reply, ctx: Context) -> bytes:
         # The command's `issues` schema SAID was stamped onto the reply by the
         # pipeline (reply.attributes carry the data; reply.schema_said the schema).
@@ -150,6 +156,8 @@ class IpexGrantIssuer:
         registrar.issue(creder, iserder, aserder)
         _complete(rgy, registrar, iserder.pre, iserder.sn,
                   verifier=verifier, credentialer=credentialer, cred_said=creder.said)
+        self._sink.on_event("IssueCredentialDoer", "credential_issued",
+                            {"said": creder.said, "schema_said": schema_said})
         return _frame_grant(hby, hab, rgy, creder.said, recipient, message, timestamp)
 
     def revoke(self, reply: Reply, ctx: Context) -> bytearray:

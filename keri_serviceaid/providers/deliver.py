@@ -16,6 +16,7 @@ from keri.app import forwarding
 
 from .resolve import Endpoint
 from .issue import Context
+from ..progress import NullSink, ProgressSink
 
 GRANT_TOPIC = "credential"
 
@@ -50,8 +51,11 @@ class PostmanDeliverer:
     enqueues it on a Poster targeting the recipient (endpoint.cid), then drives the
     Poster on a real-paced Doist until the /fwd POST completes (or a wall-clock cap)."""
 
-    def __init__(self, poster=None):
+    def __init__(self, poster=None, sink: ProgressSink | None = None):
         self._poster = poster   # injectable for tests; None ⇒ build per-deliver
+        # sink=None -> NullSink: no behavior change from this class's callers'
+        # point of view beyond the (no-op) sink calls below.
+        self._sink = sink or NullSink()
 
     def deliver(self, msg: bytes, endpoint: Endpoint, ctx: Context) -> None:
         ims = bytearray(msg)
@@ -79,3 +83,6 @@ class PostmanDeliverer:
                 _drive_until_sent(doist, deeds, poster, serder.said)
             finally:
                 doist.exit(deeds=deeds)
+            if poster.sent(serder.said):
+                self._sink.on_event("SendGrantDoer", "send_complete",
+                                    {"said": serder.said})
