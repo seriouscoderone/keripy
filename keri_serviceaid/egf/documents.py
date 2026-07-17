@@ -161,6 +161,9 @@ class EgfDocument:
         except jsonschema.exceptions.ValidationError as ex:
             raise EgfDocumentError(f"egf-doc/0.1 meta-schema violation: {ex.message}") from ex
 
+        # Belt-and-suspenders: unreachable while the schema pins spec_version via `const`
+        # (the jsonschema.validate above already rejects any other value). Kept for when
+        # the schema loosens this to an enum of supported versions.
         if sad.get("spec_version") != SUPPORTED_SPEC_VERSION:
             raise EgfDocumentError(
                 f"unsupported spec_version {sad.get('spec_version')!r}; "

@@ -40,3 +40,51 @@ def test_unsupported_spec_version_raises():
     sad = dict(sad); sad["spec_version"] = "egf-doc/9.9"
     with pytest.raises(EgfDocumentError):
         EgfDocument.from_sad(sad)
+
+def test_authority_context_non_string_value_raises():
+    _, sad = fixture_egf()
+    sad = dict(sad)
+    sad["authorities"] = [dict(sad["authorities"][0]), sad["authorities"][1]]
+    sad["authorities"][0]["context"] = {"jurisdiction": {"nested": "x"}}
+    with pytest.raises(EgfDocumentError):
+        EgfDocument.from_sad(sad)
+
+def test_authority_context_list_value_raises():
+    _, sad = fixture_egf()
+    sad = dict(sad)
+    sad["authorities"] = [dict(sad["authorities"][0]), sad["authorities"][1]]
+    sad["authorities"][0]["context"] = {"jurisdiction": ["US-UT"]}
+    with pytest.raises(EgfDocumentError):
+        EgfDocument.from_sad(sad)
+
+def test_unknown_top_level_key_raises():
+    _, sad = fixture_egf()
+    sad = dict(sad)
+    sad["unexpected_field"] = "surprise"
+    with pytest.raises(EgfDocumentError):
+        EgfDocument.from_sad(sad)
+
+def test_bad_enum_openness_raises():
+    _, sad = fixture_egf()
+    sad = dict(sad)
+    sad["ecosystem"] = dict(sad["ecosystem"])
+    sad["ecosystem"]["openness"] = "semi"
+    with pytest.raises(EgfDocumentError):
+        EgfDocument.from_sad(sad)
+
+def test_bad_said_pattern_authority_aid_raises():
+    _, sad = fixture_egf()
+    sad = dict(sad)
+    sad["authorities"] = [dict(sad["authorities"][0]), sad["authorities"][1]]
+    sad["authorities"][0]["aid"] = "not-a-said"
+    with pytest.raises(EgfDocumentError):
+        EgfDocument.from_sad(sad)
+
+def test_not_found_lookups_raise():
+    d = _doc()
+    with pytest.raises(EgfDocumentError):
+        d.role("nope")
+    with pytest.raises(EgfDocumentError):
+        d.credential("nope")
+    with pytest.raises(EgfDocumentError):
+        d.micro_app_for_role("nope")

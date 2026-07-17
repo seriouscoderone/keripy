@@ -1,5 +1,5 @@
 {
-  "$id": "EDFOGymhakbPwLkDshY75M-zyPHhUHLuh9bDzskbYr01",
+  "$id": "EOvUNYlDLO5dg45IhYN7qsXj3aC_mWjdjH5MSJtG2gzW",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "egf-doc/0.1",
   "description": "Meta-schema for egf-doc/0.1: the SAID-native Ecosystem Governance Framework document. Validates EgfDocument instances (plain SADs, not ACDCs).",
@@ -212,7 +212,10 @@
           },
           "context": {
             "type": "object",
-            "description": "Free-form dimension bindings (e.g. jurisdiction); keys are declared by context_dimensions, not fixed here."
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Free-form dimension bindings (e.g. jurisdiction); keys are declared by context_dimensions, not fixed here. Values must be strings."
           },
           "credentials": {
             "type": "array",
