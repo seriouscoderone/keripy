@@ -15,6 +15,9 @@ from keri_serviceaid.egf.documents import (
     ContextDimension,
     MicroAppRef,
 )
+from keri_serviceaid.egf.source import EgfSource, LocalDirSource, HttpOobiSource
+from keri_serviceaid.egf.resolver import EgfResolver
+from keri_serviceaid.egf.config import EgfConfig, make_resolver
 
 __all__ = [
     "EgfError",
@@ -30,4 +33,10 @@ __all__ = [
     "Authority",
     "ContextDimension",
     "MicroAppRef",
+    "EgfSource",
+    "LocalDirSource",
+    "HttpOobiSource",
+    "EgfResolver",
+    "EgfConfig",
+    "make_resolver",
 ]
