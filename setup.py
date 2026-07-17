@@ -43,6 +43,7 @@ setup(
     ],
     package_dir={'': 'src', 'keri_serviceaid': 'keri_serviceaid'},
     py_modules=[splitext(basename(path))[0] for path in glob('src/*.py')],
+    package_data={'keri_serviceaid.egf': ['schemas/*.json']},
     include_package_data=True,
     zip_safe=False,
     classifiers=[
