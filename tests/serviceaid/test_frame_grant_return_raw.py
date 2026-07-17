@@ -109,6 +109,50 @@ def test_self_issue_and_grant_return_raw_true_returns_3_tuple(
     assert serdering.SerderKERI(raw=raw).said == grant_said
 
 
+def test_frame_grant_for_threads_message_into_exn(
+        issuer_hby, rating_schema, recipient_pre):
+    """Regression (Task B9 fix): `frame_grant_for` used to hardcode
+    `message=""` when calling `_frame_grant`, silently dropping any
+    user-typed IPEX message routed through the serviceaid bridge (the
+    legacy Locksmith `SendGrantDoer` path preserved it). The exn's human
+    message lives at `sad["a"]["m"]` -- see `specialExchange`'s `attributes`
+    handling (`peer/exchanging.py`) and `ipexGrantExn`'s `data = dict(m=message, ...)`
+    (`vc/protocoling.py`)."""
+    schema_said, _sad = rating_schema
+    hab = issuer_hby.makeHab(name="svc-message")
+    rgy = credentialing.Regery(hby=issuer_hby, name="svc-message", temp=True)
+    credential_said = issue_credential(
+        issuer_hby, hab, rgy, schema_said=schema_said, recipient=recipient_pre,
+        attributes={"score": 1}, registry_name="svc-message")
+
+    grant_said, raw = frame_grant_for(
+        issuer_hby, hab, rgy, credential_said=credential_said,
+        recipient=recipient_pre, message="please review", return_raw=True)
+
+    serder = serdering.SerderKERI(raw=raw)
+    assert serder.said == grant_said
+    assert serder.sad["a"]["m"] == "please review"
+
+
+def test_frame_grant_for_default_message_is_empty_string(
+        issuer_hby, rating_schema, recipient_pre):
+    """Byte-identical-to-before default: omitting `message` still frames an
+    empty-string `m`, matching pre-fix behavior for every existing caller."""
+    schema_said, _sad = rating_schema
+    hab = issuer_hby.makeHab(name="svc-message-default")
+    rgy = credentialing.Regery(hby=issuer_hby, name="svc-message-default", temp=True)
+    credential_said = issue_credential(
+        issuer_hby, hab, rgy, schema_said=schema_said, recipient=recipient_pre,
+        attributes={"score": 1}, registry_name="svc-message-default")
+
+    grant_said, raw = frame_grant_for(
+        issuer_hby, hab, rgy, credential_said=credential_said,
+        recipient=recipient_pre, return_raw=True)
+
+    serder = serdering.SerderKERI(raw=raw)
+    assert serder.sad["a"]["m"] == ""
+
+
 def test_return_raw_bytes_parse_into_second_habery_exchanger(
         issuer_hby, rating_schema, recipient_pre):
     """Load-bearing: the raw bytes returned under `return_raw=True` are the

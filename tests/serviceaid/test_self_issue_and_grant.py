@@ -86,3 +86,24 @@ def test_issue_credential_honors_explicit_timestamp(issuer_hby, rating_schema, r
     iss = rgy.reger.cloneTvtAt(credential_said)
     iserder = serdering.SerderKERI(raw=bytes(iss))
     assert iserder.ked["dt"] == ts
+
+
+def test_self_issue_and_grant_threads_message_into_exn(
+        issuer_hby, rating_schema, recipient_pre):
+    """Regression (Task B9 fix): `self_issue_and_grant` must thread its
+    `message` kwarg all the way through `frame_grant_for` into the framed
+    IPEX grant exn's `a.m` field -- previously `frame_grant_for` hardcoded
+    `message=""`, so this kwarg had nowhere to go even if a caller passed it.
+    """
+    schema_said, _sad = rating_schema
+    hab = issuer_hby.makeHab(name="svc-sig-message")
+    rgy = credentialing.Regery(hby=issuer_hby, name="svc-sig-message", temp=True)
+
+    credential_said, grant_said, raw = self_issue_and_grant(
+        issuer_hby, hab, rgy, schema_said=schema_said, recipient=recipient_pre,
+        attributes={"score": 5}, registry_name="svc-sig-message",
+        message="hello reviewer", return_raw=True)
+
+    serder = serdering.SerderKERI(raw=raw)
+    assert serder.said == grant_said
+    assert serder.sad["a"]["m"] == "hello reviewer"

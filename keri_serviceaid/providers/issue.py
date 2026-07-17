@@ -140,6 +140,7 @@ def issue_credential(hby, hab, rgy, *, schema_said, recipient, attributes,
 
 
 def frame_grant_for(hby, hab, rgy, *, credential_said, recipient, sink=None,
+                    message: str = "",
                     return_raw: bool = False) -> str | tuple[str, bytes]:
     """Frame the IPEX grant exn for an already-issued credential and parse it
     locally.
@@ -154,6 +155,13 @@ def frame_grant_for(hby, hab, rgy, *, credential_said, recipient, sink=None,
     `sink` is reserved for host progress emissions; unused today (hosts pass
     it uniformly alongside `issue_credential`'s).
 
+    `message`: the human-readable IPEX message threaded verbatim into the
+    grant exn's `a.m` field (see `protocoling.ipexGrantExn`'s `message`
+    param / `exchanging.specialExchange`'s `attributes` handling). Defaults
+    to `""` — byte-identical to before this kwarg existed. A host with a
+    user-typed message (e.g. Locksmith's serviceaid bridge) passes it here
+    so it survives the same way the legacy `SendGrantDoer` path preserved it.
+
     Returns the grant exn SAID (`str`) when `return_raw` is False (the
     default) — behavior byte-identical to before this kwarg existed. When
     `return_raw` is True, returns `(grant_exn_said, raw_bytes)`, where
@@ -162,7 +170,7 @@ def frame_grant_for(hby, hab, rgy, *, credential_said, recipient, sink=None,
     (`Deliverer`) needs. Absent `return_raw`, that same payload is only
     recoverable after the fact via `exchanging.cloneMessage(hby, grant_said)`.
     """
-    msg = _frame_grant(hby, hab, rgy, credential_said, recipient, "", helping.nowIso8601())
+    msg = _frame_grant(hby, hab, rgy, credential_said, recipient, message, helping.nowIso8601())
     serder = serdering.SerderKERI(raw=bytes(msg))
     if return_raw:
         return serder.said, bytes(msg)
@@ -172,10 +180,14 @@ def frame_grant_for(hby, hab, rgy, *, credential_said, recipient, sink=None,
 def self_issue_and_grant(hby, hab, rgy, *, schema_said, recipient, attributes,
                          registry_name, edges=None, rules=None, sink=None,
                          timestamp: str | None = None,
+                         message: str = "",
                          return_raw: bool = False
                          ) -> tuple[str, str] | tuple[str, str, bytes]:
     """Compose `issue_credential` + `frame_grant_for`: issue the ACDC, then
     frame (and locally parse) its IPEX grant.
+
+    `message`: forwarded verbatim to `frame_grant_for` (see its docstring) —
+    defaults to `""`, unchanged from before this kwarg existed.
 
     Returns `(credential_said, grant_exn_said)` when `return_raw` is False
     (the default) — unchanged. When `return_raw` is True, returns
@@ -194,7 +206,8 @@ def self_issue_and_grant(hby, hab, rgy, *, schema_said, recipient, attributes,
         attributes=attributes, registry_name=registry_name, edges=edges,
         rules=rules, sink=sink, timestamp=timestamp)
     result = frame_grant_for(hby, hab, rgy, credential_said=credential_said,
-                             recipient=recipient, sink=sink, return_raw=return_raw)
+                             recipient=recipient, sink=sink, message=message,
+                             return_raw=return_raw)
     if return_raw:
         grant_said, raw = result
         return credential_said, grant_said, raw
