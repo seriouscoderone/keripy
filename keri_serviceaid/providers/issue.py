@@ -139,36 +139,49 @@ def issue_credential(hby, hab, rgy, *, schema_said, recipient, attributes,
     return creder.said
 
 
-def frame_grant_for(hby, hab, rgy, *, credential_said, recipient, sink=None) -> str:
+def frame_grant_for(hby, hab, rgy, *, credential_said, recipient, sink=None,
+                    return_raw: bool = False) -> str | tuple[str, bytes]:
     """Frame the IPEX grant exn for an already-issued credential and parse it
-    locally. Returns the grant exn SAID.
+    locally.
 
     Delivery is deliberately NOT included here (a `Deliverer`/host concern —
     Locksmith keeps its own peer-aware delivery; the CLI uses
     `PostmanDeliverer`). `_frame_grant` rebuilds the grant purely from
     already-persisted registry/KEL state (given just `credential_said`), so
     this function's only job beyond that is to parse the freshly-framed CESR
-    stream locally to hand back its SAID rather than the raw bytes.
+    stream locally to hand back its SAID (and, optionally, the raw bytes).
 
     `sink` is reserved for host progress emissions; unused today (hosts pass
     it uniformly alongside `issue_credential`'s).
 
-    Returns only the grant exn SAID; the framed message is parsed into the
-    local store. Hosts needing the raw bytes for delivery can recover them
-    via `exchanging.cloneMessage(hby, grant_said)` — an additive raw-bytes
-    return is a recorded follow-up (sub-project B decides the shape).
+    Returns the grant exn SAID (`str`) when `return_raw` is False (the
+    default) — behavior byte-identical to before this kwarg existed. When
+    `return_raw` is True, returns `(grant_exn_said, raw_bytes)`, where
+    `raw_bytes` is the exact framed message (serder + attachments) parsed
+    locally above — the deliverable a host's own peer-aware delivery
+    (`Deliverer`) needs. Absent `return_raw`, that same payload is only
+    recoverable after the fact via `exchanging.cloneMessage(hby, grant_said)`.
     """
     msg = _frame_grant(hby, hab, rgy, credential_said, recipient, "", helping.nowIso8601())
     serder = serdering.SerderKERI(raw=bytes(msg))
+    if return_raw:
+        return serder.said, bytes(msg)
     return serder.said
 
 
 def self_issue_and_grant(hby, hab, rgy, *, schema_said, recipient, attributes,
                          registry_name, edges=None, rules=None, sink=None,
-                         timestamp: str | None = None) -> tuple[str, str]:
+                         timestamp: str | None = None,
+                         return_raw: bool = False
+                         ) -> tuple[str, str] | tuple[str, str, bytes]:
     """Compose `issue_credential` + `frame_grant_for`: issue the ACDC, then
-    frame (and locally parse) its IPEX grant. Returns
-    `(credential_said, grant_exn_said)`.
+    frame (and locally parse) its IPEX grant.
+
+    Returns `(credential_said, grant_exn_said)` when `return_raw` is False
+    (the default) — unchanged. When `return_raw` is True, returns
+    `(credential_said, grant_exn_said, raw_bytes)`; `raw_bytes` is
+    `frame_grant_for`'s `return_raw` payload — the exact framed grant
+    message, passed through unchanged.
 
     This is the self-issuance path an onboarding "submit application" step
     uses (see `keri_serviceaid/egf/onboarding.py`'s `RequestPlan`): the
@@ -180,9 +193,12 @@ def self_issue_and_grant(hby, hab, rgy, *, schema_said, recipient, attributes,
         hby, hab, rgy, schema_said=schema_said, recipient=recipient,
         attributes=attributes, registry_name=registry_name, edges=edges,
         rules=rules, sink=sink, timestamp=timestamp)
-    grant_said = frame_grant_for(hby, hab, rgy, credential_said=credential_said,
-                                 recipient=recipient, sink=sink)
-    return credential_said, grant_said
+    result = frame_grant_for(hby, hab, rgy, credential_said=credential_said,
+                             recipient=recipient, sink=sink, return_raw=return_raw)
+    if return_raw:
+        grant_said, raw = result
+        return credential_said, grant_said, raw
+    return credential_said, result
 
 
 def ensure_registry(hby, hab, rgy, *, name: str):

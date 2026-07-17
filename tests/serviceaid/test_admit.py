@@ -2,11 +2,11 @@
 
 Two real, separate Haberies (granter, admitter) exercise the full cross-party
 IPEX grant -> admit round trip. The granter self-issues + grants a minimal
-ACDC via `issue_credential` + `_frame_grant` (the same host-agnostic halves
-`self_issue_and_grant`, Task 6, composes — see the `delivered_grant` fixture
-below for why this test calls them directly rather than through that public
-wrapper); the "delivery" step then feeds the admitter exactly what a real
-transport would ahead of/alongside the grant —
+ACDC via `issue_credential` + `frame_grant_for(..., return_raw=True)` (the
+same host-agnostic halves `self_issue_and_grant`, Task 6, composes — see the
+`delivered_grant` fixture below for why this test calls them directly rather
+than through that public wrapper); the "delivery" step then feeds the
+admitter exactly what a real transport would ahead of/alongside the grant —
 the granter's full KEL and the registry's full TEL (the same artifacts
 `credentialing.sendArtifacts` streams over the wire in production, see
 `keri/vdr/credentialing.py::sendArtifacts`) — plus the raw grant exn CESR
@@ -19,7 +19,7 @@ from types import SimpleNamespace
 import pytest
 from keri.app.habbing import Habery
 from keri.app.notifying import Notifier
-from keri.core import parsing, scheming, serdering
+from keri.core import parsing, scheming
 from keri.core.signing import Salter
 from keri.kering import Kinds, Vrsn_1_0
 from keri.peer import exchanging
@@ -30,7 +30,7 @@ from keri.vdr import eventing as teventing
 from _schema import RATING_SCHEMA_SAD
 
 from keri_serviceaid.providers.admit import admit_grant
-from keri_serviceaid.providers.issue import _frame_grant, issue_credential
+from keri_serviceaid.providers.issue import frame_grant_for, issue_credential
 
 
 class Capture:
@@ -99,22 +99,22 @@ def delivered_grant(granter_env, admitter_env):
     sink = Capture()
     timestamp = "2026-07-16T00:00:00.000000+00:00"
     # `self_issue_and_grant` composes `issue_credential` + `frame_grant_for`,
-    # but `frame_grant_for` always stamps the grant exn's own `dt` with
-    # `helping.nowIso8601()` (it has no timestamp override) and discards the
-    # raw bytes once framed — so its returned `grant_said` can never be
-    # reproduced byte-for-byte after the fact. Call `issue_credential` (the
-    # same host-agnostic issuance half `self_issue_and_grant` uses, with the
-    # same sink emission) directly followed by the same private `_frame_grant`
-    # helper `frame_grant_for` calls, so the one `msg` this fixture builds is
-    # simultaneously the "delivered" bytes and the source of `grant_said`.
+    # but `frame_grant_for` has no timestamp override for the grant exn's own
+    # `dt` (it always stamps `helping.nowIso8601()`), so calling
+    # `issue_credential` directly (with an explicit `timestamp`, for a
+    # deterministic credential `dt`) followed by `frame_grant_for(...,
+    # return_raw=True)` is equivalent to the composed call here — and gets
+    # the raw framed bytes back directly from the public API (Task B0),
+    # dissolving the previous coupling to the private `_frame_grant` helper.
     credential_said = issue_credential(
         granter_env.hby, granter_env.hab, granter_env.rgy,
         schema_said=granter_env.schemer.said, recipient=admitter_env.hab.pre,
         attributes={"score": 1}, registry_name="grt-admit", sink=sink,
         timestamp=timestamp)
-    msg = _frame_grant(granter_env.hby, granter_env.hab, granter_env.rgy,
-                       credential_said, admitter_env.hab.pre, "", timestamp)
-    grant_said = serdering.SerderKERI(raw=bytes(msg)).said
+    grant_said, msg = frame_grant_for(
+        granter_env.hby, granter_env.hab, granter_env.rgy,
+        credential_said=credential_said, recipient=admitter_env.hab.pre,
+        sink=sink, return_raw=True)
 
     # "Deliver" the granter's KEL + registry TEL artifacts — the same
     # payload credentialing.sendArtifacts streams over the wire ahead of a
