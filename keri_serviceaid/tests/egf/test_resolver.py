@@ -129,22 +129,29 @@ def test_make_resolver_local_defaults_raises_value_error():
 # --- LocalDirSource.fetch: SAID-shape guard (path traversal / absolute paths) ---
 
 def test_fetch_rejects_path_traversal_said(tmp_path):
-    # A sentinel file placed OUTSIDE the source root: if traversal ever worked,
-    # this is what it would read.
-    sentinel = tmp_path.parent / "sentinel-outside-root.json"
-    sentinel.write_text('{"leaked": true}')
-    root = tmp_path / "root"
+    # The EXACT traversal target exists as a real file one level above the source
+    # root: unguarded code resolves root/"../<A*41>.json" to it and reads it, so
+    # this test FAILS without the SAID-shape guard. Only the guard makes fetch
+    # fail closed despite the target existing.
+    root = tmp_path / "bundle"
     root.mkdir()
-    try:
-        with pytest.raises(EgfNotFound):
-            LocalDirSource(root).fetch("../" + "A" * 41)
-    finally:
-        sentinel.unlink()
-
-
-def test_fetch_rejects_absolute_path_shaped_said(tmp_path):
+    target = tmp_path / ("A" * 41 + ".json")
+    target.write_text('{"d": "x"}')
     with pytest.raises(EgfNotFound):
-        LocalDirSource(tmp_path).fetch("/etc/passwd")
+        LocalDirSource(root).fetch("../" + "A" * 41)
+    assert target.read_text() == '{"d": "x"}'  # still there; never returned
+
+
+def test_fetch_rejects_absolute_path_said(tmp_path):
+    # An absolute-path said whose ".json" target EXISTS: pathlib joins an absolute
+    # right-hand side by discarding root, so unguarded code reads victim.json and
+    # this test FAILS without the guard.
+    victim = tmp_path / "victim.json"
+    victim.write_text('{"d": "x"}')
+    root = tmp_path / "bundle"
+    root.mkdir()
+    with pytest.raises(EgfNotFound):
+        LocalDirSource(root).fetch(str(tmp_path / "victim"))
 
 
 def test_fetch_rejects_directory_shaped_said(tmp_path):
