@@ -15,9 +15,10 @@ a real issuance (closing the verification gap the brief calls out — the unit
 tests in test_progress.py only check the sink *plumbing*, not that a real
 issuance *emits*).
 """
+from keri.core import serdering
 from keri.vdr import credentialing
 
-from keri_serviceaid.providers.issue import self_issue_and_grant
+from keri_serviceaid.providers.issue import issue_credential, self_issue_and_grant
 
 
 class Capture:
@@ -54,3 +55,34 @@ def test_self_issue_and_grant_against_real_stack(issuer_hby, rating_schema, reci
     # plumbing check in test_progress.py::test_issuer_accepts_and_uses_sink).
     assert ("IssueCredentialDoer", "credential_issued",
            {"said": credential_said, "schema_said": schema_said}) in sink.events
+
+
+def test_issue_credential_honors_explicit_timestamp(issuer_hby, rating_schema, recipient_pre):
+    """An explicit `timestamp=` must deterministically reach both the ACDC
+    attribute block's `dt` and the TEL iss event's `dt` when the caller's
+    attributes omit `dt` (retry/idempotency: same timestamp -> same SAID).
+
+    Fidelity note: pre-refactor, `_issue_grant`'s timestamp only fed the
+    `creder.attrib.get("dt", timestamp)` fallback, which is unreachable —
+    `proving.credential` auto-stamps `dt` with its own now whenever absent —
+    so an explicit timestamp silently never reached the TEL. The fix stamps
+    it into the attribute block up front; this test pins that behavior.
+    """
+    schema_said, _sad = rating_schema
+    hab = issuer_hby.makeHab(name="svc-ts")
+    rgy = credentialing.Regery(hby=issuer_hby, name="svc-ts", temp=True)
+
+    ts = "2026-07-16T12:00:00.000000+00:00"
+    credential_said = issue_credential(
+        issuer_hby, hab, rgy,
+        schema_said=schema_said, recipient=recipient_pre,
+        attributes={"score": 7}, registry_name="svc-ts", timestamp=ts)
+
+    # Credential attribute block carries the explicit timestamp as its dt.
+    creder, prefixer, seqner, saider = rgy.reger.cloneCred(said=credential_said)
+    assert creder.attrib["dt"] == ts
+
+    # And the TEL iss event's dt is the same explicit timestamp.
+    iss = rgy.reger.cloneTvtAt(credential_said)
+    iserder = serdering.SerderKERI(raw=bytes(iss))
+    assert iserder.ked["dt"] == ts

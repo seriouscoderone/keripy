@@ -108,7 +108,12 @@ def validate_payload(plan: RequestPlan, payload: dict) -> None:
     2020-12). Raises `EgfDocumentError` with the offending field path folded
     into the message on the first violation (fail closed)."""
     validator = Draft202012Validator(plan.payload_schema)
-    errors = sorted(validator.iter_errors(payload), key=lambda e: list(e.path))
+    # str-coerce path elements for the sort key: array indices are ints and
+    # object keys are strs, so a heterogeneous key list would TypeError on
+    # comparison (defensive — two paths sharing an equal prefix index the same
+    # container, so a mixed compare at one position shouldn't arise, but the
+    # coercion costs nothing and holds if payloads ever loosen beyond dicts).
+    errors = sorted(validator.iter_errors(payload), key=lambda e: [str(p) for p in e.path])
     if errors:
         first = errors[0]
         path = first.json_path

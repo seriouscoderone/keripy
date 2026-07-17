@@ -64,16 +64,28 @@ def _build_edge_source(edges: dict) -> dict:
 
 
 def issue_credential(hby, hab, rgy, *, schema_said, recipient, attributes,
-                     registry_name, edges=None, rules=None, sink=None) -> str:
+                     registry_name, edges=None, rules=None, sink=None,
+                     timestamp: str | None = None) -> str:
     """Ensure registry -> create -> anchor -> issue. Returns the credential SAID.
 
     Host-agnostic issue-only half of the mint+grant sequence (extracted from
     `IpexGrantIssuer._issue_grant`'s body): a Qt host (Locksmith) that owns
     its own peer-aware delivery calls this and `frame_grant_for` separately;
     `self_issue_and_grant` composes both for hosts that want one call.
+
+    `timestamp`: when given (and `attributes` omits `dt`), it is stamped into
+    the attribute block's `dt`, so it deterministically becomes both the
+    ACDC's `dt` and the TEL iss event's `dt` — same timestamp, same SAID
+    (retry/idempotency). Merely threading it into the `.get("dt", ...)`
+    fallback below would NOT achieve this: `proving.credential` auto-stamps
+    `dt` with its own now whenever absent, so that fallback never fires on
+    this create path. When None, behavior is unchanged: `proving.credential`
+    stamps its own now (fresh SAID per call).
     """
     sink = sink or NullSink()
-    timestamp = helping.nowIso8601()
+    if timestamp is not None and attributes is not None and "dt" not in attributes:
+        attributes = {**attributes, "dt": timestamp}
+    timestamp = timestamp or helping.nowIso8601()
     ensure_registry(hby, hab, rgy, name=registry_name)
     counselor = grouping.Counselor(hby=hby)
     registrar = credentialing.Registrar(hby=hby, rgy=rgy, counselor=counselor)
@@ -123,15 +135,18 @@ def frame_grant_for(hby, hab, rgy, *, credential_said, recipient, sink=None) -> 
     already-persisted registry/KEL state (given just `credential_said`), so
     this function's only job beyond that is to parse the freshly-framed CESR
     stream locally to hand back its SAID rather than the raw bytes.
+
+    `sink` is reserved for host progress emissions; unused today (hosts pass
+    it uniformly alongside `issue_credential`'s).
     """
-    sink = sink or NullSink()
     msg = _frame_grant(hby, hab, rgy, credential_said, recipient, "", helping.nowIso8601())
     serder = serdering.SerderKERI(raw=bytes(msg))
     return serder.said
 
 
 def self_issue_and_grant(hby, hab, rgy, *, schema_said, recipient, attributes,
-                         registry_name, edges=None, rules=None, sink=None) -> tuple[str, str]:
+                         registry_name, edges=None, rules=None, sink=None,
+                         timestamp: str | None = None) -> tuple[str, str]:
     """Compose `issue_credential` + `frame_grant_for`: issue the ACDC, then
     frame (and locally parse) its IPEX grant. Returns
     `(credential_said, grant_exn_said)`.
@@ -145,7 +160,7 @@ def self_issue_and_grant(hby, hab, rgy, *, schema_said, recipient, attributes,
     credential_said = issue_credential(
         hby, hab, rgy, schema_said=schema_said, recipient=recipient,
         attributes=attributes, registry_name=registry_name, edges=edges,
-        rules=rules, sink=sink)
+        rules=rules, sink=sink, timestamp=timestamp)
     grant_said = frame_grant_for(hby, hab, rgy, credential_said=credential_said,
                                  recipient=recipient, sink=sink)
     return credential_said, grant_said
@@ -210,17 +225,21 @@ class IpexGrantIssuer:
         returning: a replay re-delivers the recorded grant rather than re-issuing.
 
         Thin delegate: mint+anchor+issue is `issue_credential`'s job (shared
-        with the CLI/Locksmith paths); this method's own `message`/explicit
-        `timestamp` overrides are legacy knobs the new host-agnostic functions
-        don't need, so this reuses the shared `_frame_grant` helper directly
-        (also used by `frame_grant_for`) rather than `self_issue_and_grant`,
-        to avoid framing the grant twice under two different timestamps.
+        with the CLI/Locksmith paths); this method's own `message` knob is
+        legacy the new host-agnostic functions don't need, so this reuses the
+        shared `_frame_grant` helper directly (also used by `frame_grant_for`)
+        rather than `self_issue_and_grant`, to avoid framing the grant twice
+        under two different timestamps. An explicit `timestamp=` is passed
+        through to `issue_credential` (stamped as the attribute `dt` when
+        absent -> deterministic credential/TEL dt) and reused for the grant
+        exn's dt; None (every current caller) leaves both to their own now,
+        exactly as before.
         """
-        timestamp = timestamp or helping.nowIso8601()
         credential_said = issue_credential(
             hby, hab, rgy, schema_said=schema_said, recipient=recipient,
             attributes=attributes, registry_name=registry_name, edges=edges,
-            rules=rules, sink=self._sink)
+            rules=rules, sink=self._sink, timestamp=timestamp)
+        timestamp = timestamp or helping.nowIso8601()
         return _frame_grant(hby, hab, rgy, credential_said, recipient, message, timestamp)
 
     def revoke(self, reply: Reply, ctx: Context) -> bytearray:

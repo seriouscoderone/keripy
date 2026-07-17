@@ -8,6 +8,7 @@ convenience defaults, and selects the authority the resulting grant is
 addressed to.
 """
 import pytest
+from keri.core import coring
 
 from keri_serviceaid.egf.documents import EgfDocument
 from keri_serviceaid.egf.errors import EgfDocumentError, NoAuthorityError
@@ -60,3 +61,25 @@ def test_select_authority_context_and_phase():
     assert a.display_name == "UT DOI"
     with pytest.raises(NoAuthorityError):
         select_authority(doc, plan, {"jurisdiction": "US-UT"}, ("production",))
+
+
+def test_select_authority_ambiguous_match_raises():
+    """TWO authorities matching the same (role, context, accepted phase) is as
+    unusable to a caller as none: NoAuthorityError, listing offered contexts."""
+    _, sad = fixture_egf()
+    shadow = dict(sad["authorities"][0])
+    shadow["display_name"] = "UT DOI (shadow)"
+    shadow["aid"] = "E" + "V" * 43
+    sad2 = dict(sad)
+    sad2["authorities"] = list(sad["authorities"]) + [shadow]
+    sad2["d"] = ""
+    _, sad2 = coring.Saider.saidify(sad=sad2, label="d")
+    doc = EgfDocument.from_sad(sad2)
+
+    plan = derive_request(FakeResolver(), doc, "carrier")
+    with pytest.raises(NoAuthorityError) as ei:
+        select_authority(doc, plan, {"jurisdiction": "US-UT"}, ("bootstrap", "production"))
+    msg = str(ei.value)
+    assert "ambiguous" in msg
+    assert "UT DOI" in msg and "UT DOI (shadow)" in msg
+    assert "offered contexts" in msg and "US-UT" in msg
