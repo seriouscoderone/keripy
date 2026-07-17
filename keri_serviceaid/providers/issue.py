@@ -111,10 +111,24 @@ def issue_credential(hby, hab, rgy, *, schema_said, recipient, attributes,
     iserder = registry.issue(said=creder.said, dt=dt)
     rseal = eventing.SealEvent(iserder.pre, iserder.snh, iserder.said)
     rseal = dict(i=rseal.i, s=rseal.s, d=rseal.d)
+    # TRANSITIONAL (Task 7 finding): hab.interact/rotate default their `version`
+    # kwarg to the module-level v2 constant regardless of the hab's OWN
+    # established version, so a v1-inception'd hab (this file's v1-hold) was
+    # silently anchoring with a v2-framed ixn/rot -- invisible to any
+    # single-Habery test (the SAME hab's own Kever applies its own event
+    # directly) but fatal to a cross-party recipient re-parsing this exact
+    # event through an explicit-version Parser (as a real mailbox delivery,
+    # or admit.py's embed re-parse, requires): "Incompatible message protocol
+    # major version" / the event never lands (discovered building Task 7's
+    # cross-party admit test). Inherit the hab's current established version
+    # instead of the module default -- mirrors protocoling.py's
+    # `serder.pvrsn if version is None else version` idiom -- so this is a
+    # true no-op for a v2-inception'd hab and a real fix for the v1-held one.
+    # Lift as a unit when upstream ships v2 registry+IPEX.
     if registry.estOnly:
-        anc = hab.rotate(data=[rseal])
+        anc = hab.rotate(data=[rseal], version=hab.kever.serder.pvrsn)
     else:
-        anc = hab.interact(data=[rseal])
+        anc = hab.interact(data=[rseal], version=hab.kever.serder.pvrsn)
     aserder = serdering.SerderKERI(raw=bytes(anc))
     credentialer.issue(creder, iserder)
     registrar.issue(creder, iserder, aserder)
@@ -185,7 +199,10 @@ def ensure_registry(hby, hab, rgy, *, name: str):
                                 nonce=coresigning.Salter().qb64)
     rseal = eventing.SealEvent(registry.regk, "0", registry.regd)
     rseal = dict(i=rseal.i, s=rseal.s, d=rseal.d)
-    anc = hab.interact(data=[rseal])
+    # TRANSITIONAL (Task 7 finding): see the matching comment in
+    # `issue_credential` -- inherit the hab's established version rather than
+    # the module-level v2 default.
+    anc = hab.interact(data=[rseal], version=hab.kever.serder.pvrsn)
     aserder = serdering.SerderKERI(raw=bytes(anc))
     registrar.incept(iserder=registry.vcp, anc=aserder)
     _complete(rgy, registrar, registry.regk, 0)
@@ -275,10 +292,13 @@ class IpexGrantIssuer:
         rserder = registry.revoke(said=said, dt=timestamp)
         rseal = eventing.SealEvent(rserder.pre, rserder.snh, rserder.said)
         rseal = dict(i=rseal.i, s=rseal.s, d=rseal.d)
+        # TRANSITIONAL (Task 7 finding): see the matching comment in
+        # `issue_credential` -- inherit the hab's established version rather
+        # than the module-level v2 default.
         if registry.estOnly:
-            anc = hab.rotate(data=[rseal])
+            anc = hab.rotate(data=[rseal], version=hab.kever.serder.pvrsn)
         else:
-            anc = hab.interact(data=[rseal])
+            anc = hab.interact(data=[rseal], version=hab.kever.serder.pvrsn)
         aserder = serdering.SerderKERI(raw=bytes(anc))
         # Registrar.revoke(creder, rserder, anc): the real signature names the rev
         # event `rserder` (NOT `serder`); creder must be the SerderACDC (it reads
