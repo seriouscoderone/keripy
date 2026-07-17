@@ -23,6 +23,8 @@ class EgfConfig:
 
 def make_resolver(cfg: EgfConfig) -> EgfResolver:
     if cfg.source == "local":
+        if cfg.local_dir is None:
+            raise ValueError("EgfConfig(source='local') requires local_dir")
         return EgfResolver(LocalDirSource(cfg.local_dir))
     if cfg.source.startswith("https://"):
         return EgfResolver(HttpOobiSource(cfg.source))

@@ -5,10 +5,13 @@ is re-verified against its claimed SAID by the resolver (resolver.py). A source
 implementation's only job is "hand me the bytes for this SAID, or tell me you
 don't have them"; it must never itself decide whether the content is trustworthy.
 """
+import re
 from pathlib import Path
 from typing import Protocol
 
 from keri_serviceaid.egf.errors import EgfNotFound
+
+_SAID_RE = re.compile(r"[A-Za-z0-9_-]{44}")
 
 
 class EgfSource(Protocol):
@@ -29,10 +32,15 @@ class LocalDirSource:
         self.root = Path(root)
 
     def fetch(self, said: str) -> bytes:
+        if not _SAID_RE.fullmatch(said):
+            # Malformed identifiers fail closed as not-found; no path is ever
+            # constructed from unvalidated input (path-traversal / absolute-path
+            # guard).
+            raise EgfNotFound(said, str(self.root))
         path = self.root / f"{said}.json"
         try:
             return path.read_bytes()
-        except FileNotFoundError:
+        except (FileNotFoundError, IsADirectoryError, NotADirectoryError):
             raise EgfNotFound(said, str(self.root)) from None
 
 

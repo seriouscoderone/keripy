@@ -74,6 +74,22 @@ def test_resolve_schema_with_version_resolves(tmp_path):
     assert resolved["version"] == "1.0.0"
 
 
+def test_cache_is_namespaced_by_kind_not_bare_said(tmp_path):
+    """A SAID cached via resolve_schema must never be handed back, unverified for
+    its kind, to resolve_egf for the same SAID — the cache key must carry the
+    artifact kind, not just the bare SAID."""
+    said = _saidified_schema({"title": "T", "version": "1.0.0"}, tmp_path)
+    resolver = EgfResolver(LocalDirSource(tmp_path))
+    schema = resolver.resolve_schema(said)
+    assert schema["version"] == "1.0.0"
+    # Re-deriving the SAID under label "d" over a document whose only expected
+    # empty field is "$id" (not "d") does not reproduce `said`, so this fails
+    # closed as an integrity error rather than silently handing back the cached
+    # schema dict as if it were a resolved EgfDocument.
+    with pytest.raises(EgfIntegrityError):
+        resolver.resolve_egf(said)
+
+
 # --- resolve_micro_app: verified plain dict, label "d" ---
 
 def test_resolve_micro_app_returns_verified_dict(tmp_path):
@@ -103,3 +119,38 @@ def test_make_resolver_https_source_wires_http_oobi(egf_dir):
 def test_make_resolver_unsupported_source_raises():
     with pytest.raises(ValueError):
         make_resolver(EgfConfig(source="s3://bucket/path"))
+
+
+def test_make_resolver_local_defaults_raises_value_error():
+    with pytest.raises(ValueError, match=r"EgfConfig\(source='local'\) requires local_dir"):
+        make_resolver(EgfConfig())
+
+
+# --- LocalDirSource.fetch: SAID-shape guard (path traversal / absolute paths) ---
+
+def test_fetch_rejects_path_traversal_said(tmp_path):
+    # A sentinel file placed OUTSIDE the source root: if traversal ever worked,
+    # this is what it would read.
+    sentinel = tmp_path.parent / "sentinel-outside-root.json"
+    sentinel.write_text('{"leaked": true}')
+    root = tmp_path / "root"
+    root.mkdir()
+    try:
+        with pytest.raises(EgfNotFound):
+            LocalDirSource(root).fetch("../" + "A" * 41)
+    finally:
+        sentinel.unlink()
+
+
+def test_fetch_rejects_absolute_path_shaped_said(tmp_path):
+    with pytest.raises(EgfNotFound):
+        LocalDirSource(tmp_path).fetch("/etc/passwd")
+
+
+def test_fetch_rejects_directory_shaped_said(tmp_path):
+    # A syntactically valid-looking SAID whose corresponding path is a directory,
+    # not a file — must fail closed as EgfNotFound, not leak IsADirectoryError.
+    said = "D" * 44
+    (tmp_path / f"{said}.json").mkdir()
+    with pytest.raises(EgfNotFound):
+        LocalDirSource(tmp_path).fetch(said)
