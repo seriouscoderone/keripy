@@ -33,3 +33,17 @@ def test_schema_label_dollar_id():
 def test_malformed_json_raises_document_error():
     with pytest.raises(EgfDocumentError):
         verify_sad(b"{not json", "E" + "A" * 43)
+
+def test_verification_is_over_as_parsed_order_not_resorted():
+    """SADs commit to their serialized insertion order (KERI convention).
+    The ecosystem's pinned schemas verify ONLY over as-parsed order; recursive
+    key-sorting at verify time would break them. Do not 'fix' verify_sad to sort."""
+    doc = {"d": "", "zeta": 1, "alpha": 2}          # deliberately NOT sorted
+    saider, sad = coring.Saider.saidify(sad=doc, label="d")
+    raw = json.dumps(sad).encode()                   # preserves insertion order
+    assert verify_sad(raw, sad["d"])["zeta"] == 1    # as-parsed verifies
+
+    resorted = {k: sad[k] for k in sorted(sad)}      # same content, sorted order
+    raw_sorted = json.dumps(resorted).encode()
+    with pytest.raises(EgfIntegrityError):
+        verify_sad(raw_sorted, sad["d"])             # different serialization = different SAID
