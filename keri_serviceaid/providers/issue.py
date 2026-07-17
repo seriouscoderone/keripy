@@ -152,6 +152,11 @@ def frame_grant_for(hby, hab, rgy, *, credential_said, recipient, sink=None) -> 
 
     `sink` is reserved for host progress emissions; unused today (hosts pass
     it uniformly alongside `issue_credential`'s).
+
+    Returns only the grant exn SAID; the framed message is parsed into the
+    local store. Hosts needing the raw bytes for delivery can recover them
+    via `exchanging.cloneMessage(hby, grant_said)` — an additive raw-bytes
+    return is a recorded follow-up (sub-project B decides the shape).
     """
     msg = _frame_grant(hby, hab, rgy, credential_said, recipient, "", helping.nowIso8601())
     serder = serdering.SerderKERI(raw=bytes(msg))
