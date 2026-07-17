@@ -63,6 +63,94 @@ def _build_edge_source(edges: dict) -> dict:
     return source
 
 
+def issue_credential(hby, hab, rgy, *, schema_said, recipient, attributes,
+                     registry_name, edges=None, rules=None, sink=None) -> str:
+    """Ensure registry -> create -> anchor -> issue. Returns the credential SAID.
+
+    Host-agnostic issue-only half of the mint+grant sequence (extracted from
+    `IpexGrantIssuer._issue_grant`'s body): a Qt host (Locksmith) that owns
+    its own peer-aware delivery calls this and `frame_grant_for` separately;
+    `self_issue_and_grant` composes both for hosts that want one call.
+    """
+    sink = sink or NullSink()
+    timestamp = helping.nowIso8601()
+    ensure_registry(hby, hab, rgy, name=registry_name)
+    counselor = grouping.Counselor(hby=hby)
+    registrar = credentialing.Registrar(hby=hby, rgy=rgy, counselor=counselor)
+    verifier = verifying.Verifier(hby=hby, reger=rgy.reger)
+    credentialer = credentialing.Credentialer(hby=hby, rgy=rgy,
+                                              registrar=registrar, verifier=verifier)
+    source = None
+    if edges:
+        source = dict(d="")
+        source.update(_build_edge_source(edges))
+        _, source = coring.Saider.saidify(sad=source, kind=Kinds.json,
+                                          label=coring.Saids.d)
+    # TRANSITIONAL: keripy v2 ACDC issuance is not implemented upstream
+    # (vc/proving.py:79 hardcodes the v1 `ri` label; the v2 SerderACDC rejects
+    # it). Hold the credential at v1 via the additive create(version=) seam.
+    # Lift as a unit when upstream ships v2 registry+IPEX.
+    creder = credentialer.create(regname=registry_name, recp=recipient,
+                                 schema=schema_said, source=source,
+                                 rules=rules, data=attributes, private=False,
+                                 version=Vrsn_1_0)
+    dt = creder.attrib.get("dt", timestamp)
+    registry = rgy.registryByName(registry_name)
+    iserder = registry.issue(said=creder.said, dt=dt)
+    rseal = eventing.SealEvent(iserder.pre, iserder.snh, iserder.said)
+    rseal = dict(i=rseal.i, s=rseal.s, d=rseal.d)
+    if registry.estOnly:
+        anc = hab.rotate(data=[rseal])
+    else:
+        anc = hab.interact(data=[rseal])
+    aserder = serdering.SerderKERI(raw=bytes(anc))
+    credentialer.issue(creder, iserder)
+    registrar.issue(creder, iserder, aserder)
+    _complete(rgy, registrar, iserder.pre, iserder.sn,
+              verifier=verifier, credentialer=credentialer, cred_said=creder.said)
+    sink.on_event("IssueCredentialDoer", "credential_issued",
+                 {"said": creder.said, "schema_said": schema_said})
+    return creder.said
+
+
+def frame_grant_for(hby, hab, rgy, *, credential_said, recipient, sink=None) -> str:
+    """Frame the IPEX grant exn for an already-issued credential and parse it
+    locally. Returns the grant exn SAID.
+
+    Delivery is deliberately NOT included here (a `Deliverer`/host concern —
+    Locksmith keeps its own peer-aware delivery; the CLI uses
+    `PostmanDeliverer`). `_frame_grant` rebuilds the grant purely from
+    already-persisted registry/KEL state (given just `credential_said`), so
+    this function's only job beyond that is to parse the freshly-framed CESR
+    stream locally to hand back its SAID rather than the raw bytes.
+    """
+    sink = sink or NullSink()
+    msg = _frame_grant(hby, hab, rgy, credential_said, recipient, "", helping.nowIso8601())
+    serder = serdering.SerderKERI(raw=bytes(msg))
+    return serder.said
+
+
+def self_issue_and_grant(hby, hab, rgy, *, schema_said, recipient, attributes,
+                         registry_name, edges=None, rules=None, sink=None) -> tuple[str, str]:
+    """Compose `issue_credential` + `frame_grant_for`: issue the ACDC, then
+    frame (and locally parse) its IPEX grant. Returns
+    `(credential_said, grant_exn_said)`.
+
+    This is the self-issuance path an onboarding "submit application" step
+    uses (see `keri_serviceaid/egf/onboarding.py`'s `RequestPlan`): the
+    requester self-issues their application credential and grants it to the
+    selected authority. The CLI calls this directly, then hands the
+    resulting grant off to its own `Deliverer`.
+    """
+    credential_said = issue_credential(
+        hby, hab, rgy, schema_said=schema_said, recipient=recipient,
+        attributes=attributes, registry_name=registry_name, edges=edges,
+        rules=rules, sink=sink)
+    grant_said = frame_grant_for(hby, hab, rgy, credential_said=credential_said,
+                                 recipient=recipient, sink=sink)
+    return credential_said, grant_said
+
+
 def ensure_registry(hby, hab, rgy, *, name: str):
     """Return the registry for `name`, creating it (no backers) if absent.
     The inception Custom Resource creates it exactly once at deploy time; this
@@ -120,45 +208,20 @@ class IpexGrantIssuer:
         carries an explicit `dt` (which reproduces the same SAID). This is WHY the
         pipeline records the request-SAID -> grant mapping (idempotency) BEFORE
         returning: a replay re-delivers the recorded grant rather than re-issuing.
+
+        Thin delegate: mint+anchor+issue is `issue_credential`'s job (shared
+        with the CLI/Locksmith paths); this method's own `message`/explicit
+        `timestamp` overrides are legacy knobs the new host-agnostic functions
+        don't need, so this reuses the shared `_frame_grant` helper directly
+        (also used by `frame_grant_for`) rather than `self_issue_and_grant`,
+        to avoid framing the grant twice under two different timestamps.
         """
         timestamp = timestamp or helping.nowIso8601()
-        ensure_registry(hby, hab, rgy, name=registry_name)
-        counselor = grouping.Counselor(hby=hby)
-        registrar = credentialing.Registrar(hby=hby, rgy=rgy, counselor=counselor)
-        verifier = verifying.Verifier(hby=hby, reger=rgy.reger)
-        credentialer = credentialing.Credentialer(hby=hby, rgy=rgy,
-                                                   registrar=registrar, verifier=verifier)
-        source = None
-        if edges:
-            source = dict(d="")
-            source.update(_build_edge_source(edges))
-            _, source = coring.Saider.saidify(sad=source, kind=Kinds.json,
-                                              label=coring.Saids.d)
-        # TRANSITIONAL: keripy v2 ACDC issuance is not implemented upstream
-        # (vc/proving.py:79 hardcodes the v1 `ri` label; the v2 SerderACDC rejects
-        # it). Hold the credential at v1 via the additive create(version=) seam.
-        # Lift as a unit when upstream ships v2 registry+IPEX.
-        creder = credentialer.create(regname=registry_name, recp=recipient,
-                                     schema=schema_said, source=source,
-                                     rules=rules, data=attributes, private=False,
-                                     version=Vrsn_1_0)
-        dt = creder.attrib.get("dt", timestamp)
-        registry = rgy.registryByName(registry_name)
-        iserder = registry.issue(said=creder.said, dt=dt)
-        rseal = eventing.SealEvent(iserder.pre, iserder.snh, iserder.said)
-        rseal = dict(i=rseal.i, s=rseal.s, d=rseal.d)
-        if registry.estOnly:
-            anc = hab.rotate(data=[rseal])
-        else:
-            anc = hab.interact(data=[rseal])
-        aserder = serdering.SerderKERI(raw=bytes(anc))
-        credentialer.issue(creder, iserder)
-        registrar.issue(creder, iserder, aserder)
-        _complete(rgy, registrar, iserder.pre, iserder.sn,
-                  verifier=verifier, credentialer=credentialer, cred_said=creder.said)
-        self._sink.on_event("IssueCredentialDoer", "credential_issued",
-                            {"said": creder.said, "schema_said": schema_said})
-        return _frame_grant(hby, hab, rgy, creder.said, recipient, message, timestamp)
+        credential_said = issue_credential(
+            hby, hab, rgy, schema_said=schema_said, recipient=recipient,
+            attributes=attributes, registry_name=registry_name, edges=edges,
+            rules=rules, sink=self._sink)
+        return _frame_grant(hby, hab, rgy, credential_said, recipient, message, timestamp)
 
     def revoke(self, reply: Reply, ctx: Context) -> bytearray:
         """Fire a TEL `rev` event for `reply.attributes["credential_said"]`,
