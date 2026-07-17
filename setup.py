@@ -38,8 +38,10 @@ setup(
     author='Samuel M. Smith',
     author_email='smith.samuel.m@gmail.com',
     url='https://github.com/WebOfTrust/keripy',
-    packages=find_packages('src'),
-    package_dir={'': 'src'},
+    packages=find_packages('src') + ['keri_serviceaid'] + [
+        f"keri_serviceaid.{p}" for p in find_packages('keri_serviceaid')
+    ],
+    package_dir={'': 'src', 'keri_serviceaid': 'keri_serviceaid'},
     py_modules=[splitext(basename(path))[0] for path in glob('src/*.py')],
     include_package_data=True,
     zip_safe=False,
