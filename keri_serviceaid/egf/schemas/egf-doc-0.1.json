@@ -1,5 +1,5 @@
 {
-  "$id": "EOvUNYlDLO5dg45IhYN7qsXj3aC_mWjdjH5MSJtG2gzW",
+  "$id": "EBsVQ1LMXg4n1Y9xUaqKskTNC5bDe33Abh-WdMSru4xR",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "egf-doc/0.1",
   "description": "Meta-schema for egf-doc/0.1: the SAID-native Ecosystem Governance Framework document. Validates EgfDocument instances (plain SADs, not ACDCs).",
@@ -27,7 +27,8 @@
       "const": "egf-doc/0.1"
     },
     "version": {
-      "type": "string"
+      "type": "string",
+      "const": "0.1.1"
     },
     "ecosystem": {
       "type": "object",
@@ -224,7 +225,25 @@
             }
           },
           "endpoints": {
-            "type": "array"
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "mode"
+              ],
+              "properties": {
+                "mode": {
+                  "type": "string"
+                },
+                "scheme": {
+                  "type": "string"
+                },
+                "oobi_ref": {
+                  "type": "string",
+                  "pattern": "^E[A-Za-z0-9_-]{43}$"
+                }
+              }
+            }
           },
           "phase_note": {
             "type": "string"

@@ -47,6 +47,17 @@ class CredentialEntry:
 
 
 @dataclass(frozen=True)
+class Endpoint:
+    """One reachability entry on an authority. `mode` is the runtime
+    dispatch discriminator (today: "direct" — direct-mode peer TCP);
+    unknown modes are carried, not rejected (forward-compatible)."""
+
+    mode: str
+    scheme: str = ""
+    oobi_ref: str = ""
+
+
+@dataclass(frozen=True)
 class Authority:
     role_id: str
     display_name: str
@@ -122,7 +133,14 @@ def _authority_from_sad(sad: dict) -> Authority:
         phase=sad["phase"],
         context=dict(sad["context"]),
         credentials=tuple(sad["credentials"]),
-        endpoints=tuple(sad["endpoints"]),
+        endpoints=tuple(
+            Endpoint(
+                mode=e["mode"],
+                scheme=e.get("scheme", ""),
+                oobi_ref=e.get("oobi_ref", ""),
+            )
+            for e in sad["endpoints"]
+        ),
         phase_note=sad["phase_note"],
         expected_transition=sad["expected_transition"],
     )

@@ -4,8 +4,10 @@ from keri.core import coring
 
 
 def fixture_egf() -> tuple[str, dict]:
+    # Define endpoint for regulator authority
+    regulator_aid = "E" + "U" * 43
     doc = {
-        "d": "", "spec_version": "egf-doc/0.1", "version": "0.1.0",
+        "d": "", "spec_version": "egf-doc/0.1", "version": "0.1.1",
         "ecosystem": {"id": "test-eco", "display_name": "Test", "openness": "closed", "description": "t"},
         "governance": {"phase": "bootstrap", "transition_plan": "t"},
         "roles": [
@@ -21,8 +23,9 @@ def fixture_egf() -> tuple[str, dict]:
              "holder_role": "carrier", "disclosure_mode": "full", "chained_from": None, "self_issued": True},
         ],
         "authorities": [
-            {"role_id": "regulator", "display_name": "UT DOI", "aid": "E" + "U" * 43, "phase": "bootstrap",
-             "context": {"jurisdiction": "US-UT"}, "credentials": ["lic"], "endpoints": [],
+            {"role_id": "regulator", "display_name": "UT DOI", "aid": regulator_aid, "phase": "bootstrap",
+             "context": {"jurisdiction": "US-UT"}, "credentials": ["lic"],
+             "endpoints": [{"mode": "direct", "scheme": "tcp", "oobi_ref": regulator_aid}],
              "phase_note": "stand-in", "expected_transition": None},
             {"role_id": "regulator", "display_name": "CA DOI", "aid": "E" + "C" * 43, "phase": "production",
              "context": {"jurisdiction": "US-CA"}, "credentials": ["lic"], "endpoints": [],
