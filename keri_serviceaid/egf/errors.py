@@ -16,3 +16,11 @@ class EgfDocumentError(EgfError):
 
 class NoAuthorityError(EgfError):
     """No authority matches (role, context) within the accepted phases."""
+
+class OobiNotFound(EgfError):
+    """No OOBI artifact available for the AID from this source."""
+
+    def __init__(self, aid: str, source: str):
+        super().__init__(f"no OOBI artifact for {aid} at {source}")
+        self.aid = aid
+        self.source = source
