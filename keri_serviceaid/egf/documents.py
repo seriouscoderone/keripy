@@ -65,7 +65,7 @@ class Authority:
     phase: str
     context: dict
     credentials: tuple
-    endpoints: tuple
+    endpoints: "tuple[Endpoint, ...]"
     phase_note: str
     expected_transition: Optional[str]
 

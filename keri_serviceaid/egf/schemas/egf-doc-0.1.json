@@ -1,5 +1,5 @@
 {
-  "$id": "EBsVQ1LMXg4n1Y9xUaqKskTNC5bDe33Abh-WdMSru4xR",
+  "$id": "EOTPLjhY0xU8DkDKjcvBxad1nqHP5olT9xkBDOFabgL5",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "egf-doc/0.1",
   "description": "Meta-schema for egf-doc/0.1: the SAID-native Ecosystem Governance Framework document. Validates EgfDocument instances (plain SADs, not ACDCs).",
@@ -27,8 +27,7 @@
       "const": "egf-doc/0.1"
     },
     "version": {
-      "type": "string",
-      "const": "0.1.1"
+      "type": "string"
     },
     "ecosystem": {
       "type": "object",

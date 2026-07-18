@@ -41,3 +41,16 @@ def test_endpoint_missing_mode_fails_closed():
     _, resaid = coring.Saider.saidify(sad=probe, label="d")
     with pytest.raises(EgfDocumentError):
         EgfDocument.from_sad(resaid)
+
+
+def test_instance_version_is_informative_not_pinned():
+    """The SAID is the normative version; properties.version must accept
+    any semver string (the live insurance EGF still says 0.1.0)."""
+    _, sad = _doc()
+    import copy
+    from keri.core import coring
+    probe = copy.deepcopy(sad)
+    probe["version"] = "0.1.0"
+    probe["d"] = ""
+    _, resaid = coring.Saider.saidify(sad=probe, label="d")
+    EgfDocument.from_sad(resaid)  # must not raise
