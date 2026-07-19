@@ -17,6 +17,17 @@ def test_edge_source_includes_operator():
     assert source["application"] == {"n": "ENODESAID", "s": "ESCHEMASAID", "o": "NI2I"}
 
 
+def test_edge_source_includes_operator_under_operator_key():
+    """Regression (live-demo blocker): Locksmith's issue dialog + legacy
+    build_edges_block emit the operator under the key `operator`, not `op`.
+    Reading only `op` dropped `o`, producing an edge a NI2I-required schema
+    (carrier_license's `application` edge) rejected with "'o' is a required
+    property". Both keys must yield `o`."""
+    edges = {"application": {"cred_said": "EN", "schema_said": "ES", "operator": "NI2I"}}
+    source = _build_edge_source(edges)
+    assert source["application"] == {"n": "EN", "s": "ES", "o": "NI2I"}
+
+
 def test_edge_source_omits_operator_when_absent():
     source = _build_edge_source({"application": {"cred_said": "E1", "schema_said": "E2"}})
     assert "o" not in source["application"]

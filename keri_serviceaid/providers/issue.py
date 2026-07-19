@@ -51,14 +51,22 @@ def _build_edge_source(edges: dict) -> dict:
 
     Each edge def carries `cred_said` (-> `n`) and `schema_said` (-> `s`).
     ACDC's default unary edge operator is I2I; when the def specifies a
-    non-default `op` (e.g. NI2I for a self-issued/no-issuee edge target),
-    that operator is surfaced as `o`. Absent `op`, `o` is omitted entirely
-    so default I2I semantics apply implicitly per the ACDC spec."""
+    non-default operator (e.g. NI2I for a self-issued/no-issuee edge
+    target), that operator is surfaced as `o`. Absent one, `o` is omitted
+    entirely so default I2I semantics apply implicitly per the ACDC spec.
+
+    The operator key is accepted as either `operator` (Locksmith's issue
+    dialog + legacy `build_edges_block` contract) or `op` (this library's
+    own shorthand) — the two must interoperate: a single-sig wallet issue
+    routes the dialog's `operator`-keyed edge through here, and reading only
+    `op` silently dropped the operator, producing an edge with no `o` that a
+    schema requiring NI2I rejects ("'o' is a required property")."""
     source = {}
     for ename, edef in edges.items():
         entry = {"n": edef["cred_said"], "s": edef["schema_said"]}
-        if "op" in edef:
-            entry["o"] = edef["op"]
+        op = edef.get("operator", edef.get("op"))
+        if op:
+            entry["o"] = op
         source[ename] = entry
     return source
 
