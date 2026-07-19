@@ -88,6 +88,29 @@ def test_issue_credential_honors_explicit_timestamp(issuer_hby, rating_schema, r
     assert iserder.ked["dt"] == ts
 
 
+def test_issue_credential_empty_rules_omits_r_block(
+        issuer_hby, rating_schema, recipient_pre):
+    """Regression (live-demo blocker): issuing with an empty ``rules={}``
+    must NOT emit an ACDC ``r`` block. The wallet issue dialog computes
+    ``rules={}`` for a schema with no rules section; RATING_SCHEMA_SAD (like
+    carrier_license) sets ``additionalProperties: false`` and declares no
+    ``r`` property, so an empty ``r`` fails validation with "Additional
+    properties are not allowed ('r' was unexpected)". ``issue_credential``
+    must coerce ``rules or None`` (matching the legacy IssueCredentialDoer).
+    Pre-fix this raised; post-fix it issues cleanly with no ``r`` field.
+    """
+    schema_said, _sad = rating_schema
+    hab = issuer_hby.makeHab(name="svc-empty-rules")
+    rgy = credentialing.Regery(hby=issuer_hby, name="svc-empty-rules", temp=True)
+
+    credential_said = issue_credential(
+        issuer_hby, hab, rgy, schema_said=schema_said, recipient=recipient_pre,
+        attributes={"score": 9}, registry_name="svc-empty-rules", rules={})
+
+    creder, _p, _s, _sa = rgy.reger.cloneCred(said=credential_said)
+    assert "r" not in creder.sad          # no empty rules block emitted
+
+
 def test_self_issue_and_grant_threads_message_into_exn(
         issuer_hby, rating_schema, recipient_pre):
     """Regression (Task B9 fix): `self_issue_and_grant` must thread its

@@ -102,10 +102,16 @@ def issue_credential(hby, hab, rgy, *, schema_said, recipient, attributes,
     # (vc/proving.py:79 hardcodes the v1 `ri` label; the v2 SerderACDC rejects
     # it). Hold the credential at v1 via the additive create(version=) seam.
     # Lift as a unit when upstream ships v2 registry+IPEX.
+    # Coerce an empty rules mapping to None so keripy omits the ACDC `r`
+    # block entirely. A schema with no `r` section and additionalProperties:
+    # false (e.g. carrier_license) rejects an empty `r` ("Additional
+    # properties are not allowed ('r' was unexpected)"). The legacy
+    # IssueCredentialDoer applies the same `rules if rules else None`
+    # normalization; the serviceaid path must match it.
     creder = credentialer.create(regname=registry_name, recp=recipient,
                                  schema=schema_said, source=source,
-                                 rules=rules, data=attributes, private=False,
-                                 version=Vrsn_1_0)
+                                 rules=rules or None, data=attributes,
+                                 private=False, version=Vrsn_1_0)
     dt = creder.attrib.get("dt", timestamp)
     registry = rgy.registryByName(registry_name)
     iserder = registry.issue(said=creder.said, dt=dt)
