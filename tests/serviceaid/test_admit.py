@@ -177,6 +177,24 @@ def test_admit_emits_sink_event_on_success(
            {"success": True, "credential_said": delivered_credential_said}) in sink.events
 
 
+def test_admit_defaults_processors_when_omitted(
+        admitter_env, delivered_grant_said, delivered_credential_said):
+    """Verify that admit_grant works without explicit kvy/tvy/vry (regression for 20325281).
+
+    Commit 20325281 added defaulting so that when kvy/tvy/vry are omitted, the grant's
+    embeds are properly verified into the local stores. This test mirrors the successful
+    admission path but exercises the default path (no kvy/tvy/vry kwargs) to ensure the
+    credential actually saves — the production path locksmith uses.
+    """
+    admit_said = admit_grant(
+        admitter_env.hby, admitter_env.hab, admitter_env.rgy,
+        grant_said=delivered_grant_said)
+
+    assert admit_said.startswith("E")
+    assert admitter_env.rgy.reger.saved.get(
+        keys=(delivered_credential_said,)) is not None
+
+
 def test_multisig_hab_raises_not_implemented(
         admitter_env, delivered_grant_said, monkeypatch):
     monkeypatch.setattr(
