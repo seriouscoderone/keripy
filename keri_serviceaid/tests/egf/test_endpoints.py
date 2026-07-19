@@ -64,3 +64,11 @@ def test_instance_version_is_informative_not_pinned():
     probe["d"] = ""
     _, resaid = coring.Saider.saidify(sad=probe, label="d")
     EgfDocument.from_sad(resaid)  # must not raise
+
+
+def test_credential_by_schema_lookup():
+    doc, sad = _doc()
+    entry = sad["credentials"][0]
+    hit = doc.credential_by_schema(entry["schema_said"])
+    assert hit is not None and hit.id == entry["id"]
+    assert doc.credential_by_schema("E" + "Z" * 43) is None

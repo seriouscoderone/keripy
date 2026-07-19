@@ -216,6 +216,15 @@ class EgfDocument:
                 return c
         raise EgfDocumentError(f"no credential {cred_id!r} in EGF document {self.said}")
 
+    def credential_by_schema(self, schema_said: str) -> Optional[CredentialEntry]:
+        """The catalog entry whose ACDC schema SAID matches, or None —
+        for consumers keyed by what arrived on the wire (an embedded
+        ACDC's `s` field) rather than by catalog id."""
+        for c in self._credentials:
+            if c.schema_said == schema_said:
+                return c
+        return None
+
     def micro_app_for_role(self, role_id: str) -> MicroAppRef:
         for m in self._micro_apps:
             if m.role_id == role_id:
