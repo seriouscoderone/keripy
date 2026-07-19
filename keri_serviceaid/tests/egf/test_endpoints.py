@@ -43,6 +43,16 @@ def test_endpoint_missing_mode_fails_closed():
         EgfDocument.from_sad(resaid)
 
 
+def test_all_authorities_spans_roles_and_filters_phase():
+    doc, _ = _doc()
+    # Default accept_phases=("production",): fixture's UT DOI is bootstrap
+    # (filtered out), CA DOI is production (kept).
+    assert [a.display_name for a in doc.all_authorities()] == ["CA DOI"]
+    all_auths = doc.all_authorities(accept_phases=("bootstrap", "production"))
+    assert [a.aid for a in all_auths] == [a.aid for a in doc.authorities(
+        "regulator", accept_phases=("bootstrap", "production"))]
+
+
 def test_instance_version_is_informative_not_pinned():
     """The SAID is the normative version; properties.version must accept
     any semver string (the live insurance EGF still says 0.1.0)."""

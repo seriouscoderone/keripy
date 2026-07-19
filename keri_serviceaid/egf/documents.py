@@ -242,3 +242,10 @@ class EgfDocument:
                 continue
             out.append(a)
         return out
+
+    def all_authorities(self, accept_phases: Iterable[str] = ("production",)) -> list:
+        """Every authority entry in an accepted phase, across ALL roles —
+        for consumers that need the full trust registry (e.g. transport
+        bring-up pairing every direct-mode authority), not one role's slice."""
+        accept_phases = tuple(accept_phases)
+        return [a for a in self._authorities if a.phase in accept_phases]
