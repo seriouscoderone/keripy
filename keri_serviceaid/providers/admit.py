@@ -35,10 +35,11 @@ from __future__ import annotations
 
 from keri import kering
 from keri.app.notifying import Notifier
-from keri.core import parsing, serdering
+from keri.core import eventing, parsing, serdering
 from keri.help import helping
 from keri.peer import exchanging
 from keri.vc import protocoling
+from keri.vdr import eventing as teventing, verifying
 
 from ..progress import NullSink, ProgressSink
 
@@ -105,6 +106,19 @@ def admit_grant(hby, hab, rgy, *, grant_said: str, exc=None, kvy=None,
 
     sink = sink or NullSink()
     exc = exc if exc is not None else _default_exchanger(hby)
+
+    # Default the embed processors when the caller passes none. The lift
+    # source (`locksmith.core.ipexing.Admitter.__init__`) built these three
+    # store-bound processors whenever they were absent; the initial lift
+    # dropped that defaulting, leaving `admit_grant`'s embed re-parse
+    # (below) a no-op so the credential was never saved and the
+    # `reger.saved` check always raised. Restored here so the grant's
+    # `anc`/`iss`/`acdc` embeds are actually verified into the local stores
+    # — the only place the ACDC body travels in an IPEX grant. Bound to the
+    # same `hby.db`/`rgy.reger` the caller admits into.
+    kvy = kvy if kvy is not None else eventing.Kevery(db=hby.db)
+    tvy = tvy if tvy is not None else teventing.Tevery(db=hby.db, reger=rgy.reger)
+    vry = vry if vry is not None else verifying.Verifier(hby=hby, reger=rgy.reger)
 
     grant, pathed = exchanging.cloneMessage(hby, grant_said)
     if grant is None:
