@@ -10,7 +10,7 @@ from .verify import Verifier, OracleVerifier, VerificationError, KeyState
 from .resolve import Resolver, OracleResolver, BoundResolver, Endpoint
 from .issue import (
     Issuer, IpexGrantIssuer, Context,
-    issue_credential, frame_grant_for, self_issue_and_grant,
+    issue_credential, frame_grant_for, self_issue_and_grant, revoke_credential,
 )
 from .deliver import Deliverer, PostmanDeliverer
 from .idempotency import IdempotencyStore, DynamoLedger, LMDBLedger
@@ -22,7 +22,7 @@ __all__ = [
     "Verifier", "OracleVerifier", "VerificationError", "KeyState",
     "Resolver", "OracleResolver", "BoundResolver", "Endpoint",
     "Issuer", "IpexGrantIssuer", "Context",
-    "issue_credential", "frame_grant_for", "self_issue_and_grant",
+    "issue_credential", "frame_grant_for", "self_issue_and_grant", "revoke_credential",
     "Deliverer", "PostmanDeliverer",
     "IdempotencyStore", "DynamoLedger", "LMDBLedger",
     "admit_grant",
