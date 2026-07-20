@@ -380,6 +380,26 @@ def _format_sse_events(hby, pre, topics):
     return "".join(out)
 
 
+def _skip_genus(raw):
+    """Return ``raw`` past a leading CESR protocol genus+version code, if present.
+
+    A genusified stream (endorse(..., genusify=True), as the /fwd deposit and
+    v1-hold qry senders produce) starts with a ``-_AAAxxx`` count code before the
+    event body. SerderKERI(raw=...) parses from offset 0 and raises ShortageError
+    on that count code, so a naive peek treats a perfectly valid deposit as
+    "unknown" — which silently skips the WS nudge. Strip the genus code first.
+    """
+    raw = bytes(raw)
+    if raw[:2] == b'-_':  # CESR protocol genus+version count code
+        try:
+            from keri.core import counting
+            ctr = counting.Counter(qb64b=raw)
+            return raw[ctr.fullSize:]
+        except Exception:
+            return raw
+    return raw
+
+
 def _detect_mbx_query(ims):
     """Peek at the first message in ims; return its serder if it's a `qry`
     with r='/mbx' (or 'mbx' — accept both), else None.
@@ -389,7 +409,7 @@ def _detect_mbx_query(ims):
     """
     from keri.core import serdering
     try:
-        serder = serdering.SerderKERI(raw=bytes(ims))
+        serder = serdering.SerderKERI(raw=_skip_genus(ims))
     except Exception:
         return None
     if serder.ked.get("t") == "qry" and serder.ked.get("r") in ("/mbx", "mbx"):
@@ -411,7 +431,7 @@ def _detect_fwd(ims):
     """
     from keri.core import serdering
     try:
-        serder = serdering.SerderKERI(raw=bytes(ims))
+        serder = serdering.SerderKERI(raw=_skip_genus(ims))
     except Exception:
         return None
     if serder.ked.get("t") == "exn" and serder.ked.get("r") == "/fwd":
