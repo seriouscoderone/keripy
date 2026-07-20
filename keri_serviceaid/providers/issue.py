@@ -228,6 +228,42 @@ def self_issue_and_grant(hby, hab, rgy, *, schema_said, recipient, attributes,
     return credential_said, result
 
 
+def revoke_credential(hby, hab, rgy, *, credential_said, registry_name,
+                      timestamp: str | None = None) -> str:
+    """Fire the TEL `rev` for `credential_said`, anchor it in the issuer's KEL,
+    and complete in-process (no-backer/v1). Returns `credential_said`.
+
+    Host-agnostic revoke-only half of the revoke+notice sequence (extracted
+    from `IpexGrantIssuer._revoke_grant`'s body), symmetric with
+    `issue_credential` vs the framing helpers: a Qt host (Locksmith) that owns
+    its own peer-aware delivery calls this and then streams the updated TEL /
+    KEL itself (via `credentialing.sendArtifacts`); the CLI path composes this
+    with `_frame_revoke` for a self-contained notice. Inherits the
+    witnessed-AID limitation documented at module top (the anchor ixn is
+    created here, so a witnessed registry's receipts cannot pre-converge on a
+    virtual-time Doist; v1 deploy uses a no-backer registry).
+    """
+    timestamp = timestamp or helping.nowIso8601()
+    ensure_registry(hby, hab, rgy, name=registry_name)
+    counselor = grouping.Counselor(hby=hby)
+    registrar = credentialing.Registrar(hby=hby, rgy=rgy, counselor=counselor)
+    registry = rgy.registryByName(registry_name)
+    rserder = registry.revoke(said=credential_said, dt=timestamp)
+    rseal = eventing.SealEvent(rserder.pre, rserder.snh, rserder.said)
+    rseal = dict(i=rseal.i, s=rseal.s, d=rseal.d)
+    # TRANSITIONAL (Task 7 finding): inherit the hab's established version
+    # rather than the module-level v2 default — see issue_credential's note.
+    if registry.estOnly:
+        anc = hab.rotate(data=[rseal], version=hab.kever.serder.pvrsn)
+    else:
+        anc = hab.interact(data=[rseal], version=hab.kever.serder.pvrsn)
+    aserder = serdering.SerderKERI(raw=bytes(anc))
+    creder = rgy.reger.cloneCred(said=credential_said)[0]
+    registrar.revoke(creder=creder, rserder=rserder, anc=aserder)
+    _complete(rgy, registrar, rserder.pre, rserder.sn)
+    return credential_said
+
+
 def ensure_registry(hby, hab, rgy, *, name: str):
     """Return the registry for `name`, creating it (no backers) if absent.
     The inception Custom Resource creates it exactly once at deploy time; this
@@ -327,33 +363,17 @@ class IpexGrantIssuer:
                       registry_name="svc", message="", timestamp=None) -> bytearray:
         """Revoke the ACDC `said` and return a CESR notice framing the rev event.
 
-        Partial-failure semantics mirror `_issue_grant`: a death after
-        `hab.interact` but before `_complete` leaves a harmless orphan KEL anchor
-        with the rev event in escrow; the next `_complete` pumps it through.
+        Thin delegate: the local TEL rev + KEL anchor + completion is
+        `revoke_credential`'s job (shared with the Locksmith bridge path); this
+        method's own `message`/notice framing is legacy the host-agnostic
+        function doesn't need, so it composes `revoke_credential` + the shared
+        `_frame_revoke` helper. Partial-failure semantics unchanged (see
+        `_issue_grant`): a death mid-sequence leaves a harmless orphan anchor +
+        an escrowed rev that the next `_complete` pumps through.
         """
         timestamp = timestamp or helping.nowIso8601()
-        ensure_registry(hby, hab, rgy, name=registry_name)
-        counselor = grouping.Counselor(hby=hby)
-        registrar = credentialing.Registrar(hby=hby, rgy=rgy, counselor=counselor)
-        registry = rgy.registryByName(registry_name)
-        # registry.revoke(said, dt) -> SerderKERI of the rev/brv TEL event.
-        rserder = registry.revoke(said=said, dt=timestamp)
-        rseal = eventing.SealEvent(rserder.pre, rserder.snh, rserder.said)
-        rseal = dict(i=rseal.i, s=rseal.s, d=rseal.d)
-        # TRANSITIONAL (Task 7 finding): see the matching comment in
-        # `issue_credential` -- inherit the hab's established version rather
-        # than the module-level v2 default.
-        if registry.estOnly:
-            anc = hab.rotate(data=[rseal], version=hab.kever.serder.pvrsn)
-        else:
-            anc = hab.interact(data=[rseal], version=hab.kever.serder.pvrsn)
-        aserder = serdering.SerderKERI(raw=bytes(anc))
-        # Registrar.revoke(creder, rserder, anc): the real signature names the rev
-        # event `rserder` (NOT `serder`); creder must be the SerderACDC (it reads
-        # creder.regid), recovered via reger.cloneCred(said)[0].
-        creder = rgy.reger.cloneCred(said=said)[0]
-        registrar.revoke(creder=creder, rserder=rserder, anc=aserder)
-        _complete(rgy, registrar, rserder.pre, rserder.sn)
+        revoke_credential(hby, hab, rgy, credential_said=said,
+                          registry_name=registry_name, timestamp=timestamp)
         return _frame_revoke(hby, hab, rgy, said, recipient, message, timestamp)
 
 
