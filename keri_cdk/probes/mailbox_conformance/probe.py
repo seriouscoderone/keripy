@@ -135,18 +135,28 @@ def _make_fwd_message(sender_hab, recipient_pre, topic, embedded_msg):
     peer.exchanging.specialExchange with an `evt` embed):
       - specialExchange(sender, route="/fwd", modifiers={pre, topic},
                         attributes={}, embeds=dict(evt=<inner CESR>)) -> (fwd, atc)
-      - hab.endorse(serder=fwd, last=False, framed=True) signs the exn; the
-        embeds attachment `atc` is appended AFTER the signed exn.
+      - hab.endorse(serder=fwd, ...) signs the exn; the embeds attachment `atc`
+        is appended AFTER the signed exn.
+
+    ``/fwd`` keeps the legacy v1 ``specialExchange`` body shape (forwarding._exchangeVersion),
+    so the endorsement attachment MUST carry a matching v1 genus code
+    (``gvrsn=Vrsn_1_0, genusify=True``). Without it, the mailbox parser cannot associate the
+    signatures with the v1 exn body ("Missing attached exchanger signatures") and silently
+    drops the deposit — nothing reaches storeMsg and the drain returns empty.
     """
     from keri.peer.exchanging import specialExchange
+    from keri.kering import Kinds, Vrsn_1_0
     fwd, atc = specialExchange(
         sender=sender_hab.pre,
         route="/fwd",
         modifiers={"pre": recipient_pre, "topic": topic},
         attributes={},
         embeds=dict(evt=bytes(embedded_msg)),
+        version=Vrsn_1_0,
+        kind=Kinds.json,
     )
-    signed = sender_hab.endorse(serder=fwd, last=False, framed=True)
+    signed = sender_hab.endorse(serder=fwd, last=False, framed=True,
+                               gvrsn=Vrsn_1_0, genusify=True)
     signed.extend(atc)
     return bytes(signed)
 

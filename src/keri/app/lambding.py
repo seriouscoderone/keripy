@@ -202,6 +202,13 @@ def setup_baser(dber):
     dber.vrcs = subing.CatCesrIoSetSuber(db=dber, subkey='vrcs.',
                                           klas=(coring.Prefixer, coring.Number,
                                                 coring.Diger, indexing.Siger))
+    # v2 indexed transferable-receipt endorsement store (basing.py:951 .vrcsNew).
+    # The 'vrcsnew.' subkey is already declared in BASER_STORES, but the matching
+    # suber attribute was never attached here — a partial migration that surfaced
+    # as "'DynamoDBer' object has no attribute 'vrcsNew'" 500s from cloneEvtMsg
+    # (OOBI replay). Mirrors the tsgs gap noted below.
+    dber.vrcsNew = subing.CesrIoSetSuber(db=dber, subkey='vrcsnew.',
+                                          klas=indexing.Siger)
     dber.vres = subing.CatCesrIoSetSuber(db=dber, subkey='vres.',
                                           klas=(coring.Diger, coring.Prefixer,
                                                 coring.Number, coring.Diger,
