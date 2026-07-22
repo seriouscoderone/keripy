@@ -21,8 +21,14 @@ SUPPORTED_SPEC_VERSION = "egf-doc/0.1"
 @dataclass(frozen=True)
 class Onboarding:
     grant_credential_id: str
-    request_micro_app_said: str
-    request_command_id: str
+    request_micro_app_said: str = ""
+    request_command_id: str = ""
+
+    @property
+    def apply_mode(self) -> bool:
+        """True when the role onboards via a bare IPEX apply (no form/micro-app).
+        Present request_micro_app_said => form mode (the carrier pattern)."""
+        return not self.request_micro_app_said
 
 
 @dataclass(frozen=True)
@@ -97,8 +103,8 @@ def _onboarding_from_sad(sad: Optional[dict]) -> Optional[Onboarding]:
         return None
     return Onboarding(
         grant_credential_id=sad["grant_credential_id"],
-        request_micro_app_said=sad["request_micro_app_said"],
-        request_command_id=sad["request_command_id"],
+        request_micro_app_said=sad.get("request_micro_app_said", ""),
+        request_command_id=sad.get("request_command_id", ""),
     )
 
 
