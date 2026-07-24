@@ -1,5 +1,5 @@
 {
-  "$id": "EOTPLjhY0xU8DkDKjcvBxad1nqHP5olT9xkBDOFabgL5",
+  "$id": "EN_gmhiwDmSG7opL28wM_Xn0wNOLx7K0e60sSNIPMQfR",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "egf-doc/0.1",
   "description": "Meta-schema for egf-doc/0.1: the SAID-native Ecosystem Governance Framework document. Validates EgfDocument instances (plain SADs, not ACDCs).",
@@ -109,10 +109,16 @@
           "onboarding": {
             "type": "object",
             "required": [
-              "grant_credential_id",
-              "request_micro_app_said",
-              "request_command_id"
+              "grant_credential_id"
             ],
+            "dependentRequired": {
+              "request_micro_app_said": [
+                "request_command_id"
+              ],
+              "request_command_id": [
+                "request_micro_app_said"
+              ]
+            },
             "additionalProperties": false,
             "properties": {
               "grant_credential_id": {

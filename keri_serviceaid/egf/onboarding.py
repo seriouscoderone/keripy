@@ -57,6 +57,30 @@ class RequestPlan:
     registry_name: str
 
 
+@dataclass(frozen=True)
+class ApplyPlan:
+    """Everything a host needs to send an apply-mode role request:
+    which schema to apply for, and which schemas to seed into the vault so
+    the eventual grant chain-verifies (escrowMSE avoidance)."""
+    role_id: str
+    grant_credential: "CredentialEntry"
+    schema_saids_to_seed: tuple[str, ...]
+
+
+def derive_apply_request(egf, role_id: str) -> ApplyPlan:
+    """Apply-mode sibling of derive_request: no micro-app, no payload schema,
+    no registry (nothing is self-issued). Works for any onboardable role."""
+    role = egf.role(role_id)
+    if role.onboarding is None:
+        raise EgfDocumentError(f"role '{role_id}' has no onboarding block")
+    grant = egf.credential(role.onboarding.grant_credential_id)
+    seeds = [grant.schema_said]
+    if grant.chained_from is not None:
+        seeds.append(egf.credential(grant.chained_from).schema_said)
+    return ApplyPlan(role_id=role_id, grant_credential=grant,
+                     schema_saids_to_seed=tuple(seeds))
+
+
 def derive_request(resolver, egf: EgfDocument, role_id: str) -> RequestPlan:
     """Walk `egf` from `role_id` to the payload schema for its onboarding
     "submit application" command, resolving the role's micro-app via
@@ -68,6 +92,10 @@ def derive_request(resolver, egf: EgfDocument, role_id: str) -> RequestPlan:
     role = egf.role(role_id)
     if role.onboarding is None:
         raise EgfDocumentError(f"role {role_id!r} has no onboarding block in EGF document {egf.said}")
+
+    if role.onboarding.apply_mode:
+        raise EgfDocumentError(
+            f"role '{role_id}' onboards via IPEX apply; use derive_apply_request")
 
     onboarding = role.onboarding
     grant_credential = egf.credential(onboarding.grant_credential_id)
