@@ -18,7 +18,14 @@ serverless stack: `keri_cdk`, `dynamodbing`, `lambding`, Service-AID) diverge fr
 - **`moto` is required** for the `DynamoDBer` tests (`tests/db/test_dynamodbing*`) — without it the
   `dber` fixture **skips silently** (you'll see "passed" counts that omit the real coverage).
 - `pytest-asyncio` for the mailbox SSE tests; `aws-cdk-lib`/`constructs` for the CDK synth tests
-  (`tests/cdk/`). No `--import-mode` flag needed (that's a locksmith-only shadow workaround).
+  (`tests/cdk/`).
+- **Run `.venv/bin/pytest <path> -q --import-mode=importlib`** — the entry point, and the flag is
+  **required** (an earlier version of this line wrongly called it "a locksmith-only workaround").
+  The tracked `keri/cf/` dir makes a root-level `keri` namespace package that shadows the
+  editable-installed `src/keri`. Without the flag, `tests/` and `keri_serviceaid/` are *interrupted*
+  at collection — `ImportError: cannot import name '__version__'/'Schemes' from 'keri' (unknown
+  location)`, not a partial run. `python -m pytest` fails **even with** the flag: `-m` prepends CWD
+  to `sys.path`, re-creating the shadow.
 
 ## CDK deploy (`ecosystems/keri_host/`)
 
