@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 from keri_serviceaid import pipeline
 from keri_serviceaid.contract import Reply, ServiceAid
+from keri_serviceaid.providers.verify import KeyState
 
 
 # ---------------------------------------------------------------------------
@@ -19,8 +20,10 @@ from keri_serviceaid.contract import Reply, ServiceAid
 # ---------------------------------------------------------------------------
 
 class _FakeVerifier:
-    def verify(self, sender, attachments, hby):
-        return SimpleNamespace(tier="direct")   # minimal KeyState stand-in
+    # Signature mirrors the Verifier Protocol (providers/verify.py): the
+    # pipeline passes the command's floor as keyword-only `min_tier`.
+    def verify(self, sender, ims, hby, *, min_tier=None):
+        return KeyState(pre=sender, tier=min_tier or "receipts")
 
 
 class _FakeAuthz:

@@ -21,7 +21,12 @@ from keri_serviceaid.providers.issue import (
 
 def _stack():
     hby = habbing.Habery(name="rev", temp=True, free=True)
-    hab = hby.makeHab(name="rev", transferable=True, wits=[], toad=0)
+    # v1-pinned for the same reason as the `issue_env` fixture below: the TEL
+    # registry's `vcp` inception is v1-only, and Registry.make inherits the
+    # hab's pvrsn — an unpinned hab now defaults to v2, so ensure_registry
+    # raises SerializeError("Invalid packet type (ilk) = vcp").
+    hab = hby.makeHab(name="rev", transferable=True, wits=[], toad=0,
+                      version=Vrsn_1_0)
     # temp=True so the Reger shares the temp Habery's ephemeral lifecycle. A
     # persistent Reger keyed by a fixed name collides across runs: a fresh temp
     # Habery mints a NEW hab.pre each run, but the on-disk registry record keeps
