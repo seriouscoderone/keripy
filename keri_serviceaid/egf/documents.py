@@ -46,7 +46,7 @@ class CredentialEntry:
     name: str
     schema_said: str
     issuer_role: str
-    holder_role: str
+    holder_role: Optional[str]
     disclosure_mode: str
     chained_from: Optional[str]
     self_issued: bool
@@ -124,7 +124,7 @@ def _credential_from_sad(sad: dict) -> CredentialEntry:
         name=sad["name"],
         schema_said=sad["schema_said"],
         issuer_role=sad["issuer_role"],
-        holder_role=sad["holder_role"],
+        holder_role=sad.get("holder_role"),
         disclosure_mode=sad["disclosure_mode"],
         chained_from=sad["chained_from"],
         self_issued=sad["self_issued"],

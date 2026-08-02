@@ -145,7 +145,6 @@
           "name",
           "schema_said",
           "issuer_role",
-          "holder_role",
           "disclosure_mode",
           "chained_from",
           "self_issued"

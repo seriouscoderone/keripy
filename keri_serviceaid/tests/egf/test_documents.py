@@ -1,5 +1,5 @@
 import pytest
-from keri_serviceaid.egf.documents import EgfDocument
+from keri_serviceaid.egf.documents import EgfDocument, _credential_from_sad
 from keri_serviceaid.egf.errors import EgfDocumentError
 from keri_serviceaid.tests.egf.fixtures.make_fixture_egf import fixture_egf
 
@@ -88,3 +88,17 @@ def test_not_found_lookups_raise():
         d.credential("nope")
     with pytest.raises(EgfDocumentError):
         d.micro_app_for_role("nope")
+
+def test_credential_entry_accepts_an_untargeted_credential():
+    entry = _credential_from_sad({
+        "id": "rating_attestation", "name": "Rating Attestation",
+        "schema_said": "E" + "a" * 43, "issuer_role": "actuary",
+        "disclosure_mode": "full", "chained_from": None, "self_issued": False})
+    assert entry.holder_role is None
+
+def test_self_issued_survives_and_stays_required():
+    entry = _credential_from_sad({
+        "id": "app", "name": "A", "schema_said": "E" + "a" * 43,
+        "issuer_role": "carrier", "holder_role": "carrier",
+        "disclosure_mode": "full", "chained_from": None, "self_issued": True})
+    assert entry.self_issued is True and entry.holder_role == "carrier"
