@@ -5,7 +5,9 @@ from keri.core import coring
 
 
 def _body_and_seal():
-    body = {"kind": "mandate", "line_of_business": "general_liability"}
+    # Keys deliberately NOT in alphabetical order: this is what makes the whole
+    # file sensitive to a sort_keys regression in the production serialization.
+    body = {"line_of_business": "general_liability", "kind": "mandate"}
     raw = json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode()
     return body, {"d": coring.Diger(ser=raw).qb64}
 
@@ -36,6 +38,15 @@ def test_a_malformed_seal_returns_false_and_does_not_raise():
     assert verifySealedBody(seal={"d": "not-a-said"}, body=body) is False
 
 
+def test_a_non_dict_seal_returns_false_and_does_not_raise():
+    """The seal side gets the same never-raises guarantee as the body side."""
+    from keri.core.sealing import verifySealedBody
+    body, _ = _body_and_seal()
+    assert verifySealedBody(seal="not-a-dict", body=body) is False
+    assert verifySealedBody(seal=["not", "a", "dict"], body=body) is False
+    assert verifySealedBody(seal=42, body=body) is False
+
+
 def test_a_bytes_body_verifies():
     from keri.core.sealing import verifySealedBody
     body, seal = _body_and_seal()
@@ -43,7 +54,7 @@ def test_a_bytes_body_verifies():
     assert verifySealedBody(seal=seal, body=raw) is True
 
 
-def test_unserializable_body_returns_false():
+def test_an_unserializable_body_returns_false():
     from keri.core.sealing import verifySealedBody
 
     class UnserializableObject:

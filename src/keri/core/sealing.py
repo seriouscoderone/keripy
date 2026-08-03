@@ -13,12 +13,12 @@ from keri.core import coring
 
 def verifySealedBody(seal, body):
     """True iff body re-derives to seal["d"]. False on any mismatch or malformed input."""
-    said = (seal or {}).get("d")
-    if not said:
-        return False
     try:
+        said = (seal or {}).get("d")
+        if not said:
+            return False
         raw = body if isinstance(body, bytes) else json.dumps(
             body, separators=(",", ":"), ensure_ascii=False).encode()
         return coring.Diger(ser=raw).qb64 == said
-    except Exception:          # malformed said, unsupported code, json serialization error
+    except Exception:          # non-dict seal, malformed said, unsupported code, json error
         return False
