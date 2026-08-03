@@ -69,3 +69,27 @@ def test_watcher_reports_every_seal_in_a_multi_seal_event():
         from keri.app.anchoring import AnchorWatcher
         watcher = AnchorWatcher(hab=peer, pre=peer.pre)
         assert [s["d"] for _, s in watcher.since(sn=0)] == [a, b]
+
+
+def test_checkpoint_is_a_scan_cursor_not_the_last_reported_seal():
+    """A trailing event with no seals still advances the checkpoint.
+
+    checkpoint is the highest sn *examined*, not the highest sn *returned*.
+    Without this, a peer whose latest event carries no anchors would be
+    re-scanned on every poll forever.
+    """
+    with habbing.openHby(name="cursor", temp=True) as hby:
+        peer = hby.makeHab(name="peer")
+        said = coring.Diger(ser=b'{"n":"only"}').qb64
+        peer.interact(data=[{"d": said}])            # sn=1, anchored
+        peer.interact()                              # sn=2, no seals
+
+        from keri.app.anchoring import AnchorWatcher
+        watcher = AnchorWatcher(hab=peer, pre=peer.pre)
+
+        found = watcher.since(sn=0)
+        assert [s["d"] for _, s in found] == [said]
+        assert [n for n, _ in found] == [1]          # only sn 1 carried a seal
+        assert watcher.checkpoint == 2               # but sn 2 WAS examined
+
+        assert watcher.since(sn=watcher.checkpoint) == []

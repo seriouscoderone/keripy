@@ -18,7 +18,13 @@ class AnchorWatcher:
         self.checkpoint = -1
 
     def since(self, sn):
-        """Return [(sn, seal), ...] for seals in events with sequence number > sn."""
+        """Return [(sn, seal), ...] for seals in events with sequence number > sn.
+
+        Advances .checkpoint to the highest sequence number EXAMINED — which is
+        not necessarily the highest one returned, because events without seals
+        are examined and contribute nothing. checkpoint is a scan cursor, so
+        passing it back as `sn` never re-examines an event.
+        """
         found = []
         for serder in self.hab.db.getEvtPreIter(pre=self.pre):
             esn = serder.sn
