@@ -11,7 +11,7 @@ arrival order or the sender's say-so.
 import json
 
 from keri.app import habbing
-from keri.core import coring, eventing, parsing, serdering
+from keri.core import coring, eventing, serdering
 
 
 def test_client_builds_a_signed_pro_that_reparses_to_the_same_said():
@@ -25,6 +25,32 @@ def test_client_builds_a_signed_pro_that_reparses_to_the_same_said():
         serder = serdering.SerderKERI(raw=raw)
         assert serder.ilk == "pro"
         assert serdering.SerderKERI(raw=serder.raw).said == serder.said
+        assert serder.ked["q"]["d"] == said     # the ask actually carries the said
+        assert serder.ked["r"] == "/sealed"     # and the default route
+
+
+def test_the_target_pre_is_a_routing_selector_and_not_on_the_wire():
+    """`pre` addresses the request; it deliberately does not enter the signed bytes.
+
+    A `pro` has no recipient field -- prod(pre=...) is the SENDER. Two requests
+    for the same said differ only in delivery, never in content. If this ever
+    starts failing, the pro message gained a recipient field and ProdClient
+    must be revisited.
+    """
+    with habbing.openHby(name="routing", temp=True) as hby:
+        hab = hby.makeHab(name="asker")
+        said = coring.Diger(ser=b'{"x":3}').qb64
+
+        from keri.app.prodding import ProdClient
+        client = ProdClient(hab=hab)
+        to_x = serdering.SerderKERI(raw=client.request(pre="EPeerX", said=said))
+        to_y = serdering.SerderKERI(raw=client.request(pre="EPeerY", said=said))
+
+        assert to_x.ked["i"] == hab.pre                  # sender, not target
+        assert to_y.ked["i"] == hab.pre
+        assert "EPeerX" not in to_x.raw.decode()         # target is nowhere on the wire
+        assert "EPeerY" not in to_y.raw.decode()
+        assert to_x.ked["q"] == to_y.ked["q"]            # same ask either way
 
 
 def test_client_carries_az_in_the_q_block_without_changing_the_field_domain():
@@ -53,6 +79,50 @@ def test_harvest_returns_the_body_for_the_requested_said_and_none_otherwise():
         client = ProdClient(hab=hab)
         assert client.harvest(serder=serder, said=said) == body
         assert client.harvest(serder=serder, said="EOtherSaid") is None
+
+
+def test_harvest_rejects_a_non_dict_value_under_the_right_key():
+    """The isinstance guard's real job: right key, wrong value type.
+
+    Without this the guard could be weakened to `found is not None` and no
+    test would notice.
+    """
+    with habbing.openHby(name="nondict", temp=True) as hby:
+        hab = hby.makeHab(name="discloser")
+        said = coring.Diger(ser=b'{"k":1}').qb64
+
+        from keri.app.prodding import ProdClient
+        client = ProdClient(hab=hab)
+        for junk in ("not-a-dict", ["not", "a", "dict"], 42):
+            serder = eventing.bare(pre=hab.pre, route="/sealed", data={said: junk})
+            assert client.harvest(serder=serder, said=said) is None
+
+
+def test_harvest_returns_none_when_the_a_block_itself_is_not_a_dict():
+    """harvest() must not raise when `a` itself is malformed, not just its values.
+
+    `serdering._verify()` checks field NAMES only, never value TYPES (it only
+    diffs the SAD's top-level KEYS against the FieldDom's allowed labels), so a
+    `bar` whose `a` is a list rather than a dict is not rejected anywhere
+    upstream -- confirmed directly: `eventing.bare(data=["not","a","dict"])`
+    builds and returns a normal, well-formed serder with `ked["a"]` literally a
+    list. The old `data = serder.ked.get("a") or {}` line would then call
+    `.get(said)` on that list and raise AttributeError -- verified live against
+    the pre-fix code before this fix was written. harvest() must hold the same
+    never-raises-on-malformed-input line `verifySealedBody` (Task 3) holds.
+    """
+    with habbing.openHby(name="listA", temp=True) as hby:
+        hab = hby.makeHab(name="discloser")
+        said = coring.Diger(ser=b'{"k":2}').qb64
+
+        serder = eventing.bare(pre=hab.pre, route="/sealed",
+                                data=["not", "a", "dict", "at", "all"])
+        assert isinstance(serder.ked["a"], list), \
+            "bare() no longer accepts a list a-block -- this test's premise changed"
+
+        from keri.app.prodding import ProdClient
+        client = ProdClient(hab=hab)
+        assert client.harvest(serder=serder, said=said) is None
 
 
 def test_bare_does_not_enforce_said_keying_of_its_a_block():

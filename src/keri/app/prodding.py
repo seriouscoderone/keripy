@@ -208,7 +208,16 @@ class ProdClient:
         self.hab = hab
 
     def request(self, pre, said, route="/sealed", az=None):
-        """Signed `pro` bytes asking `pre` for the body behind `said`."""
+        """Signed `pro` bytes (a `bytearray`, as `Hab.endorse` returns) asking
+        for the body behind `said`.
+
+        `pre` is the peer the request is FOR -- a routing selector, not a wire
+        field. A `pro` carries no recipient: `prod(pre=...)` is the *sender's*
+        AID, and which peer receives the request is decided by delivery (whose
+        Parser gets the bytes in direct mode; which endpoint is POSTed to in a
+        deployment). `pre` is therefore accepted so callers and transports can
+        address the request, and by design does not affect the signed bytes.
+        """
         query = dict(d=said)
         if az is not None:
             query["az"] = az          # spec: no other TOP-LEVEL fields allowed
@@ -217,6 +226,8 @@ class ProdClient:
 
     def harvest(self, serder, said):
         """Body for `said` from a received `bar`, or None if absent."""
-        data = serder.ked.get("a") or {}
+        data = serder.ked.get("a")
+        if not isinstance(data, dict):
+            return None
         found = data.get(said)
         return found if isinstance(found, dict) else None
