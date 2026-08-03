@@ -29,7 +29,7 @@ from hio.base import doing
 from hio.help import decking
 
 from .. import help
-from ..core.eventing import bare
+from ..core.eventing import bare, prod
 from ..kering import Kinds, Vrsn_1_0
 
 logger = help.ogler.getLogger()
@@ -194,3 +194,49 @@ class ProdResponderDoer(doing.Doer):
         if msgs := self.responder.service():
             self.send(msgs)
         return False
+
+
+class ProdClient:
+    """The requesting half of prod/bare.
+
+    ProdResponder answers prods; this asks. Correlation is by the requested
+    SAID because bar.a is keyed by it -- and eventing.bare() does not enforce
+    that keying, so harvest() checks rather than assumes.
+    """
+
+    def __init__(self, hab):
+        self.hab = hab
+
+    def request(self, pre, said, route="/sealed", az=None, pvrsn=Vrsn_1_0,
+                kind=Kinds.json):
+        """Signed `pro` bytes (a `bytearray`, as `Hab.endorse` returns) asking
+        for the body behind `said`.
+
+        `pre` is the peer the request is FOR -- a routing selector, not a wire
+        field. A `pro` carries no recipient: `prod(pre=...)` is the *sender's*
+        AID, and which peer receives the request is decided by delivery (whose
+        Parser gets the bytes in direct mode; which endpoint is POSTed to in a
+        deployment). `pre` is therefore accepted so callers and transports can
+        address the request, and by design does not affect the signed bytes.
+
+        `pvrsn` defaults to match `ProdResponder`'s default (`Vrsn_1_0`), not
+        `prod()`'s own default (`Vrsn_2_0`). A version mismatch between the
+        two sides is not an error -- a version-pinned `Parser` silently drops
+        a message built at a different major version before it ever reaches
+        `Kevery`, so a mismatched request yields no reply, not an exception.
+        """
+        query = dict(d=said)
+        if az is not None:
+            query["az"] = az          # spec: no other TOP-LEVEL fields allowed
+        serder = prod(pre=self.hab.pre, route=route, query=query,
+                      pvrsn=pvrsn, kind=kind)
+        return self.hab.endorse(serder=serder, last=False, framed=True,
+                                gvrsn=pvrsn)
+
+    def harvest(self, serder, said):
+        """Body for `said` from a received `bar`, or None if absent."""
+        data = serder.ked.get("a")
+        if not isinstance(data, dict):
+            return None
+        found = data.get(said)
+        return found if isinstance(found, dict) else None
