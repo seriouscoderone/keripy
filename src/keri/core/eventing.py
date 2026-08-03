@@ -13,7 +13,7 @@ from ordered_set import OrderedSet as oset
 from hio.help import decking, ogler
 
 
-from ..kering import (MissingEntryError, UntrustedKeyStateSource,
+from ..kering import (KeriError, MissingEntryError, UntrustedKeyStateSource,
                       ValidationError, MissingSignatureError,
                       MissingWitnessSignatureError, UnverifiedReplyError,
                       MissingDelegationError, OutOfOrderError,
@@ -28,7 +28,7 @@ from ..help import helping, Reb64
 
 from .coring import (PreDex, DigDex, NonTransDex, NumDex, Prefixer,
                      Diger, Number, Seqner, Cigar, Dater, Noncer,
-                     Verfer, Diger, Prefixer, Tholder, Texter)
+                     Verfer, Diger, Prefixer, Saider, Tholder, Texter)
 
 from .counting import Counter, Codens
 from .structing import (Structor, Sealer, SealEvent, SealSource, SealLast, BlindState,
@@ -4721,11 +4721,22 @@ class Kevery:
             case Ilks.xip:
                 self.processXip(serder, kwa)
 
-            case Ilks.pro:
-                self.processPro(serder, kwa)
+            case Ilks.pro | Ilks.bar:
+                # source from trans last indexed sig groups, as qry above
+                if kwa.get('lsgs'):
+                    pre, sigers = kwa['lsgs'][-1]
+                    kwa['source'] = pre
+                    kwa['sigers'] = sigers
 
-            case Ilks.bar:
-                self.processBar(serder, kwa)
+                if not (kwa.get('source') or kwa.get('cigars', [])):
+                    raise ValidationError(
+                        f"Missing attached signature(s) for "
+                        f"{ilk} msg = {serder.pretty()}.")
+
+                if ilk == Ilks.pro:
+                    self.processPro(serder, **kwa)
+                else:
+                    self.processBar(serder, **kwa)
 
             case _:
                 raise ValidationError(
@@ -4736,17 +4747,213 @@ class Kevery:
         """Stub: KERI v2 exchange transaction; no processing yet."""
         pass
 
-    def processPro(self, serder, kwa):
-        """Stub: Prod, 'pro', message requesting disclosure of data anchored by
-        a seal in a KEL; a responder would answer with a Bare, 'bar'. Not
-        implemented — messages reaching here are silently discarded."""
-        pass
+    def authenticateMsg(self, serder, *, source=None, sigers=None, cigars=None,
+                        seqner=None, ssaider=None):
+        """Verify attached signatures on a non-key-event message and return the
+        authenticated sender AID.
 
-    def processBar(self, serder, kwa):
-        """Stub: Bare, 'bar', message disclosing data associated with a seal,
-        either solicited by a Prod, 'pro', or unsolicited. Not implemented —
-        messages reaching here are silently discarded."""
-        pass
+        Deliberately stricter than .processQuery, which does not verify at all
+        (see its ToDo). Prod/Bare carry a disclosure decision, so knowing who is
+        asking is load bearing rather than advisory.
+
+        Returns:
+            spre (str): qb64 AID of the verified sender
+
+        Raises:
+            ValidationError: when no attached signature verifies
+
+        Parameters:
+            serder (SerderKERI): message whose .raw was signed
+            source (Prefixer|None): sender AID from an indexed sig group
+            sigers (list[Siger]|None): attached controller indexed sigs
+            cigars (list[Cigar]|None): attached nontransferable sigs
+            seqner (Number|None): sn of the establishment event whose keys signed,
+                when the sigs came from a trans indexed sig group (last=False)
+            ssaider (Saider|None): SAID of that establishment event
+        """
+        if source is not None:
+            spre = source.qb64
+            if spre not in self.kevers:
+                raise ValidationError(f"Unknown sender {spre} for msg="
+                                      f"{serder.pretty()}.")
+
+            if seqner is not None:  # sigs reference a specific est event
+                eserder = self.fetchEstEvent(spre, seqner.sn)
+                if eserder is None:
+                    raise ValidationError(f"Missing est event at sn={seqner.sn} "
+                                          f"for {spre} for msg="
+                                          f"{serder.pretty()}.")
+                if ssaider is not None and eserder.said != ssaider.qb64:
+                    raise ValidationError(f"Mismatched est event SAID for {spre} "
+                                          f"for msg={serder.pretty()}.")
+                verfers = eserder.verfers
+            else:  # last indexed sig group: current key state
+                verfers = self.kevers[spre].verfers
+
+            vsigers, _ = verifySigs(serder.raw, sigers or [], verfers)
+            if not vsigers:
+                raise ValidationError(f"Unverified signatures from {spre} for "
+                                      f"msg={serder.pretty()}.")
+            return spre
+
+        for cigar in (cigars or []):
+            if cigar.verfer.verify(sig=cigar.raw, ser=serder.raw):
+                return cigar.verfer.qb64
+
+        raise ValidationError(f"Missing or unverified attached signature(s) for "
+                              f"msg={serder.pretty()}.")
+
+
+    def anchoringPre(self, said, pres):
+        """Return the first AID in pres whose KEL anchors a digest seal for said.
+
+        Returns None when no candidate KEL anchors it.
+
+        Parameters:
+            said (str): qb64 SAID committed to by the seal
+            pres (list[str]): candidate AIDs whose KELs to search
+        """
+        for pre in pres:
+            if self.db.fetchLastSealingEventBySeal(pre=pre, seal=dict(d=said)):
+                return pre
+        return None
+
+
+    def processPro(self, serder, *, source=None, sigers=None, cigars=None,
+                   seqner=None, ssaider=None, **kwa):
+        """Process a Prod, 'pro', message requesting disclosure of the data
+        committed to by a seal anchored in a KEL.
+
+        This discloses nothing. It is the protocol half only: authenticate the
+        requester, confirm the requested SAID really is anchored in a KEL held
+        here, then cue the request. Whether to answer, and with what, is a
+        disclosure policy decision owned by the responder (keri.app.prodding) --
+        because anchoring data is a commitment to it, not consent to publish it.
+
+        Cues dict(kin="prod", ...) when the SAID is anchored. Escrows and raises
+        QueryNotFoundError when it is not yet, so a `pro` that merely arrives
+        early is still answered once the anchor lands.
+
+        Parameters:
+            serder (SerderKERI): prod message
+            source (Prefixer|None): requester AID from trans last indexed sig group
+            sigers (list[Siger]|None): attached controller indexed sigs
+            cigars (list[Cigar]|None): attached nontransferable sigs
+        """
+        ked = serder.ked
+        route = ked["r"]
+        qry = ked.get("q") or {}
+
+        dest = self.authenticateMsg(serder, source=source, sigers=sigers,
+                                    cigars=cigars, seqner=seqner,
+                                    ssaider=ssaider)
+
+        said = qry.get("d")
+        if not said:
+            raise ValidationError(f"Missing requested SAID in prod q block for "
+                                  f"msg={serder.pretty()}.")
+
+        # Whose KEL anchors it: an explicit q['i'] as .processQuery uses, else
+        # the AIDs this Kevery is controller for -- a prod addressed to us is a
+        # request to disclose something we committed to.
+        pres = [qry["i"]] if "i" in qry else list(self.prefixes)
+
+        if (apre := self.anchoringPre(said, pres)) is None:
+            if source is not None:  # escrow needs a prefixer to key on
+                self.escrowQueryNotFoundEvent(serder=serder, prefixer=source,
+                                              sigers=sigers, cigars=cigars)
+            msg = (f"Prod not found error on route={route} for SAID={said} "
+                   f"SAID={serder.said}")
+            logger.debug(msg)
+            logger.debug("Prod Body=\n%s\n", serder.pretty())
+            raise QueryNotFoundError(msg)
+
+        self.cues.push(dict(kin="prod", serder=serder, said=said, apre=apre,
+                            route=route, dest=dest, source=source))
+
+
+    def processBar(self, serder, *, source=None, sigers=None, cigars=None,
+                   seqner=None, ssaider=None, **kwa):
+        """Process a Bare, 'bar', message disclosing data committed to by a seal.
+
+        Authority comes from the anchor, not from the sender. Two checks carry
+        that, and both are enforced here because nothing else enforces them:
+
+        1. The 'a' block MUST be keyed by SAID, with each body re-deriving to
+           the SAID it is filed under. eventing.bare() documents this shape but
+           does not enforce it -- tests/core/test_bare.py:94 hands it a flat dict
+           and gets a flat 'a' back. The key is also the only handle correlating
+           a bar to the prod that asked for it, so an un-keyed 'a' is not merely
+           untidy, it is uncorrelatable.
+        2. That SAID MUST be anchored by a seal in the discloser's KEL.
+
+        Together these reject a tampered body whose outer SAID has been repaired
+        and a substituted body that is internally valid but not the committed one.
+
+        A bar MAY be unsolicited, so nothing here requires a prior prod.
+
+        Correlation. A bar carries no reference to the prod that asked for it --
+        no prior field, no echo of the prod's own SAID -- so the correlation key
+        is the pair (sender AID, SAID keying the 'a' entry), surfaced on the cue
+        as ('source', 'said'). The sender half matters because the same content
+        has the same SAID everywhere, so prodding two parties for one SAID would
+        otherwise be indistinguishable. Correlation here is bookkeeping, not
+        security: since authority is the anchor and a bar may be unsolicited, a
+        disclosure is verified identically whether or not it was requested.
+        Matching one to an outstanding prod only answers "may I stop waiting",
+        never "should I believe this".
+
+        Cues dict(kin="bare", ...) per verified body.
+
+        Parameters:
+            serder (SerderKERI): bare message
+            source (Prefixer|None): discloser AID from trans last indexed sig group
+            sigers (list[Siger]|None): attached controller indexed sigs
+            cigars (list[Cigar]|None): attached nontransferable sigs
+        """
+        spre = self.authenticateMsg(serder, source=source, sigers=sigers,
+                                    cigars=cigars, seqner=seqner,
+                                    ssaider=ssaider)
+        data = serder.ked.get("a") or {}
+        route = serder.ked["r"]
+
+        if not data:
+            raise ValidationError(f"Empty 'a' block in bare msg="
+                                  f"{serder.pretty()}.")
+
+        verified = {}
+        for said, sad in data.items():
+            if not isinstance(sad, dict):
+                raise ValidationError(f"Bare 'a' block not keyed by SAID: entry "
+                                      f"{said} is not a SAD in msg="
+                                      f"{serder.pretty()}.")
+            try:
+                saider, _ = Saider.saidify(sad=dict(sad))
+            except (KeriError, ValueError, TypeError, KeyError) as ex:
+                # Narrow on purpose: a bare `except Exception` here once
+                # swallowed a NameError and reported it as a bad body, which is
+                # the kind of masking that ships a check that never checks.
+                raise ValidationError(f"Undigestable disclosed body under {said} "
+                                      f"in msg={serder.pretty()}.") from ex
+            if saider.qb64 != said:
+                raise ValidationError(f"Disclosed body re-derives to "
+                                      f"{saider.qb64} not {said} it is filed "
+                                      f"under in msg={serder.pretty()}.")
+            verified[said] = sad
+
+        for said, sad in verified.items():
+            if self.anchoringPre(said, [spre]) is None:
+                if source is not None:
+                    self.escrowQueryNotFoundEvent(serder=serder, prefixer=source,
+                                                  sigers=sigers, cigars=cigars)
+                msg = (f"Bare not anchored error: {said} has no seal in KEL of "
+                       f"{spre} for msg SAID={serder.said}")
+                logger.debug(msg)
+                logger.debug("Bare Body=\n%s\n", serder.pretty())
+                raise QueryNotFoundError(msg)
+
+            self.cues.push(dict(kin="bare", serder=serder, said=said, sad=sad,
+                                route=route, source=spre))
 
     def processAttachedReceiptCouples(self, serder, cigars, *, firner=None,
                                       local=None, **kwa):
@@ -6993,7 +7200,16 @@ class Kevery:
                         cigars.append(cigar)
 
                     source = Prefixer(qb64b=pre)
-                    self.processQuery(serder=eserder, source=source, sigers=sigers, cigars=cigars)
+                    # qnfs also escrows pro/bar whose seal has not landed yet,
+                    # so re-process by ilk rather than assuming a query.
+                    if eserder.ilk == Ilks.pro:
+                        self.processPro(serder=eserder, source=source,
+                                        sigers=sigers, cigars=cigars)
+                    elif eserder.ilk == Ilks.bar:
+                        self.processBar(serder=eserder, source=source,
+                                        sigers=sigers, cigars=cigars)
+                    else:
+                        self.processQuery(serder=eserder, source=source, sigers=sigers, cigars=cigars)
 
                 except QueryNotFoundError as ex:
                     # still waiting on missing prior event to validate
