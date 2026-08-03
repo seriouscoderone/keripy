@@ -1553,6 +1553,50 @@ class Parser:
                     raise ValidationError(f"Invalid resource type {route}"
                                                  f"so dropped msg={serder.pretty()}.")
 
+            elif ilk in (Ilks.pro, Ilks.bar):  # prod request / bare disclosure
+                # Without this branch both fell through to the else below and
+                # were dropped as "Unexpected message ilk", which parse()
+                # swallows at DEBUG -- so Kevery.processPro/processBar were
+                # unreachable from the wire regardless of what they contained.
+                # Accept either signing form: last indexed sig groups (keys as
+                # of current key state) or indexed sig groups referencing the
+                # establishment event whose keys signed. hab.endorse() emits
+                # lsgs for last=True and tsgs for last=False, and both are
+                # legitimate here, so handle both rather than one.
+                exts.setdefault("source", None)
+                if exts['lsgs']:
+                    # use last one if more than one
+                    pre, sigers = exts['lsgs'][-1]
+                    exts["source"] = pre
+                    exts["sigers"] = sigers
+                elif exts['tsgs']:
+                    pre, seqner, ssaider, sigers = exts['tsgs'][-1]
+                    exts["source"] = pre
+                    exts["sigers"] = sigers
+                    exts["seqner"] = seqner
+                    exts["ssaider"] = ssaider
+                else:
+                    exts['sigers'] = []  # just in case sigers provided not by lsgs
+
+                if not (exts['source'] or exts['cigars']):  # need one or the other
+                    raise ValidationError(f"Missing attached signature(s) for "
+                                                 f"{ilk} msg = {serder.pretty()}.")
+
+                try:
+                    if ilk == Ilks.pro:
+                        kvy.processPro(**exts)
+                    else:
+                        kvy.processBar(**exts)
+                except AttributeError as ex:
+                    raise ValidationError(f"No kevery to process so "
+                                f" dropped msg={serder.pretty()}") from ex
+                except QueryNotFoundError as ex:  # catch escrow error and log it
+                    if logger.isEnabledFor(logging.TRACE):
+                        logger.exception("Error processing %s = %s", ilk, ex)
+                        logger.trace("Body=\n%s\n", serder.pretty())
+                    else:
+                        logger.error("Error processing %s = %s", ilk, ex)
+
             elif ilk in (Ilks.exn,):
                 if not (exts['cigars'] or exts['tsgs']):
                     raise ValidationError(f"Missing attached exchanger "
