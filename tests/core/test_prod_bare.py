@@ -490,6 +490,54 @@ def test_pro_with_no_attached_signatures_is_refused_by_the_parser():
                               kvy=kvyA, tvy=None, exc=None, rvy=None, vry=None)
 
 
+def test_parser_branch_without_a_kevery_raises():
+    """Defensive branch copied from the qry path: no Kevery, no processing."""
+    with habbing.openHby(name="req", temp=True) as hbyB:
+        habB = hbyB.makeHab(name="requester")
+        serder = prod(pre=habB.pre, route="sealed", query=dict(d="E" + "A" * 43),
+                      pvrsn=Vrsn_1_0, kind=Kinds.json)
+        sigers = habB.sign(ser=serder.raw, indexed=True)
+
+        with pytest.raises(ValidationError):
+            parsing.Parser(version=Vrsn_1_0).msgProcess(
+                exts=dict(serder=serder, sigers=sigers, cigars=[], tsgs=[],
+                          lsgs=[(coring.Prefixer(qb64=habB.pre), sigers)],
+                          wigers=[], ssts=[], sscs=[], local=False),
+                kvy=None, tvy=None, exc=None, rvy=None, vry=None)
+
+
+def test_escrowed_pro_logs_at_trace_level():
+    """The QueryNotFoundError log branch has a TRACE arm and an error arm.
+
+    Only the error arm ran under the default level, so the TRACE arm was dead
+    in test even though it is the arm that prints the message body an operator
+    would actually debug from.
+    """
+    import logging as _logging
+
+    with habbing.openHby(name="disc", temp=True) as hbyA, \
+            habbing.openHby(name="req", temp=True) as hbyB:
+        habA = hbyA.makeHab(name="discloser")
+        habB = hbyB.makeHab(name="requester")
+        hbyA.makeHab(name="unused")
+
+        _, saidified = coring.Saider.saidify(sad=dict(d="", mandate="auto/UT"))
+        said = saidified["d"]  # never anchored -> escrows -> QueryNotFoundError
+
+        kvyA = eventing.Kevery(db=hbyA.db, lax=True, local=False)
+        giveKel(habB, kvyA)
+
+        prior = parsing.logger.level
+        parsing.logger.setLevel(_logging.TRACE)
+        try:
+            parsing.Parser(kvy=kvyA, version=Vrsn_1_0).parse(
+                ims=bytearray(buildPro(habB, said)), kvy=kvyA)
+        finally:
+            parsing.logger.setLevel(prior)
+
+        assert list(hbyA.db.qnfs.getTopItemIter(keys=b'')), "pro was not escrowed"
+
+
 def test_pro_from_unknown_sender_is_rejected():
     """No key state for the requester means no way to authenticate them."""
     with habbing.openHby(name="disc", temp=True) as hbyA, \
@@ -636,6 +684,105 @@ def test_authenticateMsg_rejects_missing_or_mismatched_est_event():
         with pytest.raises(ValidationError):
             kvyA.authenticateMsg(serder, source=source, sigers=sigers,
                                  seqner=coring.Number(num=0), ssaider=wrong)
+
+
+def test_client_policy_can_gate_on_an_authorizing_credential_in_q():
+    """The AuthZ seam must be able to see what the requester actually sent.
+
+    This is the shape upstream issue #520 anticipates: the prod carries a
+    reference to an authorizing ACDC, and the responder decides from it. The
+    reference goes in `q` rather than at top level, because `q` is a free-form
+    modifier block while a new top-level field would violate the spec's "No
+    other top-level fields are allowed (MUST NOT appear)".
+
+    Written as a *client* would write it -- a plain callable, no subclassing --
+    and driven from the wire, so it proves the seam rather than describing it.
+    Before `serder` was passed to the policy this test could not be written at
+    all: the 'az' value was unreachable from inside a policy.
+    """
+    GRANTED = "EHxsFOAkc6TCjLm-3IPPMlU8O6z2NNlWyRTUwuPBRT4k"
+
+    def credentialPolicy(source, said, route, serder):
+        # A real one would verify the chain roots to the EGF authorities[] and
+        # that the TEL says not-revoked AT REQUEST TIME. Here we only need to
+        # prove the seam hands over enough to make that decision.
+        return (serder.ked.get("q") or {}).get("az") == GRANTED
+
+    with habbing.openHby(name="disc", temp=True) as hbyA, \
+            habbing.openHby(name="req", temp=True) as hbyB:
+        habA = hbyA.makeHab(name="discloser")
+        habB = hbyB.makeHab(name="requester")
+
+        said, saidified = anchorSad(habA, dict(d="", mandate="auto/UT"))
+        kvyA = eventing.Kevery(db=hbyA.db, lax=True, local=False)
+        giveKel(habB, kvyA)
+
+        responder = ProdResponder(hab=habA, kvy=kvyA,
+                                  disclosable={said: saidified},
+                                  policy=credentialPolicy)
+
+        def prodWith(az):
+            q = dict(d=said)
+            if az is not None:
+                q["az"] = az
+            serder = prod(pre=habB.pre, route="sealed", query=q,
+                          pvrsn=Vrsn_1_0, kind=Kinds.json)
+            return habB.endorse(serder=serder, last=False, framed=True,
+                                gvrsn=Vrsn_1_0)
+
+        # no credential referenced -> refused
+        parsing.Parser(kvy=kvyA, version=Vrsn_1_0).parse(
+            ims=bytearray(prodWith(None)), kvy=kvyA)
+        assert responder.service() == bytearray()
+
+        # wrong credential -> refused
+        parsing.Parser(kvy=kvyA, version=Vrsn_1_0).parse(
+            ims=bytearray(prodWith("E" + "Z" * 43)), kvy=kvyA)
+        assert responder.service() == bytearray()
+
+        # the granted credential -> disclosed
+        parsing.Parser(kvy=kvyA, version=Vrsn_1_0).parse(
+            ims=bytearray(prodWith(GRANTED)), kvy=kvyA)
+        assert responder.service(), "credentialed requester was refused"
+
+
+def test_a_raising_policy_fails_closed_and_does_not_stall_the_drain():
+    """Caller code gets to be buggy without becoming a disclosure bug.
+
+    A credential-verifying policy has many ways to raise -- missing registry,
+    unresolvable chain, malformed reference. That must deny, and must not
+    abort the rest of the cue drain.
+    """
+    with habbing.openHby(name="disc", temp=True) as hbyA, \
+            habbing.openHby(name="req", temp=True) as hbyB:
+        habA = hbyA.makeHab(name="discloser")
+        habB = hbyB.makeHab(name="requester")
+
+        boom, boomSad = anchorSad(habA, dict(d="", mandate="auto/UT"))
+        fine, fineSad = anchorSad(habA, dict(d="", mandate="home/CA"))
+
+        kvyA = eventing.Kevery(db=hbyA.db, lax=True, local=False)
+        giveKel(habB, kvyA)
+
+        def flaky(source, said, route, serder):
+            if said == boom:
+                raise RuntimeError("registry unreachable")
+            return True
+
+        responder = ProdResponder(hab=habA, kvy=kvyA,
+                                  disclosable={boom: boomSad, fine: fineSad},
+                                  policy=flaky)
+
+        for target in (boom, fine):
+            parsing.Parser(kvy=kvyA, version=Vrsn_1_0).parse(
+                ims=bytearray(buildPro(habB, target)), kvy=kvyA)
+
+        msgs = responder.service()
+        assert msgs, "the raising request stalled the whole drain"
+        # exactly one bar came back, and it is for the SAD whose policy answered
+        assert bytes(msgs).count(b'"t":"bar"') == 1
+        assert fine.encode() in bytes(msgs)
+        assert boom.encode() not in bytes(msgs), "raising policy disclosed"
 
 
 def test_unauthorized_pro_gets_silence():

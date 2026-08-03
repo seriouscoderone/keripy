@@ -35,18 +35,26 @@ from ..kering import Kinds, Vrsn_1_0
 logger = help.ogler.getLogger()
 
 
-def denyAll(source, said, route):
+def denyAll(source, said, route, serder):
     """Default disclosure policy: refuse everyone.
 
     Parameters:
-        source (str): qb64 AID of the authenticated requester
+        source (str): qb64 AID of the authenticated requester. Verified -- the
+            signature over the prod was checked against this AID's key state,
+            so this is proven identity, not a claim.
         said (str): qb64 SAID of the requested SAD
         route (str): route from the prod message
+        serder (SerderKERI): the prod itself, so a policy can read anything the
+            requester sent. In particular its 'q' block, which is where an
+            authorizing-credential reference belongs (upstream issue #520's
+            'az'): 'q' is a free-form modifier block, whereas a new top-level
+            field would violate the spec's "No other top-level fields are
+            allowed".
     """
     return False
 
 
-def openPolicy(source, said, route):
+def openPolicy(source, said, route, serder):
     """Disclose to any authenticated requester.
 
     Appropriate for data that is untargeted and meant to be widely readable --
@@ -56,10 +64,16 @@ def openPolicy(source, said, route):
 
 
 def allowList(*sources):
-    """Policy factory: disclose only to the named AIDs."""
+    """Policy factory: disclose only to the named AIDs.
+
+    A static roster of AIDs is app-layer permissioning, not derived authority.
+    Useful for tests and closed deployments; for anything credential-governed,
+    write a policy that verifies an authorizing ACDC instead -- that is what the
+    `serder` argument is for.
+    """
     allowed = frozenset(sources)
 
-    def policy(source, said, route):
+    def policy(source, said, route, serder):
         return source in allowed
 
     return policy
@@ -138,7 +152,19 @@ class ProdResponder:
                         said, source)
             return None
 
-        if not self.policy(source, said, route):
+        try:
+            permitted = self.policy(source, said, route, cue["serder"])
+        except Exception as ex:  # noqa: BLE001 - a policy is caller code
+            # Fail CLOSED. A policy that raises is a policy that did not say
+            # yes, and a credential-verifying one has plenty of ways to raise
+            # (missing registry, unresolvable chain, malformed 'az'). Letting
+            # this propagate would also abort the rest of the cue drain, so one
+            # bad request could stall every pending disclosure.
+            logger.error("Prod: policy raised for %s from %s, denying: %s",
+                         said, source, ex)
+            return None
+
+        if not permitted:
             logger.info("Prod: policy denied %s to %s", said, source)
             return None
 
