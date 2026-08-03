@@ -29,3 +29,43 @@ def test_which_seal_shapes_the_finder_can_locate():
 
         assert found_digest is not None, "SealDigest must be locatable on this fork"
         assert found_event is not None, "SealEvent must be locatable"
+
+
+def test_watcher_reports_only_anchors_newer_than_the_checkpoint():
+    with habbing.openHby(name="watch", temp=True) as hby:
+        peer = hby.makeHab(name="peer")
+        first = coring.Diger(ser=b'{"n":1}').qb64
+        second = coring.Diger(ser=b'{"n":2}').qb64
+        peer.interact(data=[{"d": first}])
+        peer.interact(data=[{"d": second}])
+
+        from keri.app.anchoring import AnchorWatcher
+        watcher = AnchorWatcher(hab=peer, pre=peer.pre)
+
+        found = watcher.since(sn=0)
+        assert [seal["d"] for _, seal in found] == [first, second]
+        assert watcher.checkpoint == 2
+
+        assert watcher.since(sn=watcher.checkpoint) == []
+
+
+def test_watcher_skips_events_with_no_seals():
+    with habbing.openHby(name="noseal", temp=True) as hby:
+        peer = hby.makeHab(name="peer")
+        peer.interact()                                  # ixn, no anchors
+        said = coring.Diger(ser=b'{"n":3}').qb64
+        peer.interact(data=[{"d": said}])
+        from keri.app.anchoring import AnchorWatcher
+        watcher = AnchorWatcher(hab=peer, pre=peer.pre)
+        assert [s["d"] for _, s in watcher.since(sn=0)] == [said]
+
+
+def test_watcher_reports_every_seal_in_a_multi_seal_event():
+    with habbing.openHby(name="multi", temp=True) as hby:
+        peer = hby.makeHab(name="peer")
+        a = coring.Diger(ser=b'{"n":"a"}').qb64
+        b = coring.Diger(ser=b'{"n":"b"}').qb64
+        peer.interact(data=[{"d": a}, {"d": b}])
+        from keri.app.anchoring import AnchorWatcher
+        watcher = AnchorWatcher(hab=peer, pre=peer.pre)
+        assert [s["d"] for _, s in watcher.since(sn=0)] == [a, b]
