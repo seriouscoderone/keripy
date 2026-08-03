@@ -11,7 +11,8 @@ arrival order or the sender's say-so.
 import json
 
 from keri.app import habbing
-from keri.core import coring, eventing, serdering
+from keri.core import coring, eventing, parsing, serdering
+from keri.kering import Kinds, Vrsn_1_0
 
 
 def test_client_builds_a_signed_pro_that_reparses_to_the_same_said():
@@ -36,6 +37,18 @@ def test_the_target_pre_is_a_routing_selector_and_not_on_the_wire():
     for the same said differ only in delivery, never in content. If this ever
     starts failing, the pro message gained a recipient field and ProdClient
     must be revisited.
+
+    `request()` defaults to `Vrsn_1_0` (to match `ProdResponder`'s default --
+    see the fix-round-2 report), and a v1 `pro` carries no `i` field at all
+    (confirmed by running: `'i' in serder.ked` is False under v1, unlike v2).
+    So this test cannot assert "the `i` field is the sender, not the target" --
+    there is no `i` field to inspect. Sender identity under v1 is proven
+    elsewhere, by actual delivery through a real Kevery/ProdResponder
+    (`test_a_client_built_pro_actually_gets_a_bar_from_a_real_responder`
+    below, and `tests/core/test_prod_bare.py`'s `dest`-from-cue assertions).
+    What this test still proves, version-independent: the routing target
+    never appears in the wire bytes, and the ask itself is identical either
+    way.
     """
     with habbing.openHby(name="routing", temp=True) as hby:
         hab = hby.makeHab(name="asker")
@@ -46,8 +59,6 @@ def test_the_target_pre_is_a_routing_selector_and_not_on_the_wire():
         to_x = serdering.SerderKERI(raw=client.request(pre="EPeerX", said=said))
         to_y = serdering.SerderKERI(raw=client.request(pre="EPeerY", said=said))
 
-        assert to_x.ked["i"] == hab.pre                  # sender, not target
-        assert to_y.ked["i"] == hab.pre
         assert "EPeerX" not in to_x.raw.decode()         # target is nowhere on the wire
         assert "EPeerY" not in to_y.raw.decode()
         assert to_x.ked["q"] == to_y.ked["q"]            # same ask either way
@@ -163,3 +174,41 @@ def test_bare_does_not_enforce_said_keying_of_its_a_block():
         # so this is not merely an artifact of skipped validation elsewhere.
         reparsed = serdering.SerderKERI(raw=serder.raw)
         assert reparsed.said == serder.said
+
+
+def test_a_client_built_pro_actually_gets_a_bar_from_a_real_responder():
+    """The seam Task 4 was missing: ProdClient's bytes must work on a real responder.
+
+    Every other test here inspects the pro ProdClient produces. None delivered
+    it. A v2/v1 protocol-version mismatch between client and responder yields
+    ZERO replies and no exception, so byte-inspection alone cannot catch it.
+    """
+    with habbing.openHby(name="rtc", temp=True) as hbyA, \
+            habbing.openHby(name="rtd", temp=True) as hbyB:
+        asker = hbyA.makeHab(name="asker")
+        disc = hbyB.makeHab(name="discloser")
+
+        sad = dict(d="", kind="mandate", jurisdiction="US-UT")
+        _, saidified = coring.Saider.saidify(sad=dict(sad))
+        said = saidified["d"]
+        disc.interact(data=[dict(d=said)])
+
+        kvyB = eventing.Kevery(db=hbyB.db, lax=True, local=False)
+        # KEL replay uses the DEFAULT parser version: Habery emits a v2 KEL and
+        # a v1-pinned parser drops it SILENTLY, leaving the Kevery empty.
+        parsing.Parser(kvy=kvyB).parse(ims=bytearray(asker.replay()), kvy=kvyB)
+
+        from keri.app.prodding import ProdClient, ProdResponder, allowList
+        pro = ProdClient(hab=asker).request(pre=disc.pre, said=said, route="sealed")
+
+        responder = ProdResponder(hab=disc, kvy=kvyB, disclosable={said: saidified},
+                                  policy=allowList(asker.pre))
+        parsing.Parser(kvy=kvyB, version=Vrsn_1_0).parse(ims=bytearray(pro), kvy=kvyB)
+
+        barMsg = responder.service()          # returns a bytearray, NOT a generator
+        assert barMsg, "client-built pro produced no bar -- check pvrsn agreement"
+
+        bar = serdering.SerderKERI(raw=bytes(barMsg))
+        got = ProdClient(hab=asker).harvest(serder=bar, said=said)
+        rederived, _ = coring.Saider.saidify(sad=dict(got))
+        assert rederived.qb64 == said

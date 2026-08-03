@@ -207,7 +207,8 @@ class ProdClient:
     def __init__(self, hab):
         self.hab = hab
 
-    def request(self, pre, said, route="/sealed", az=None):
+    def request(self, pre, said, route="/sealed", az=None, pvrsn=Vrsn_1_0,
+                kind=Kinds.json):
         """Signed `pro` bytes (a `bytearray`, as `Hab.endorse` returns) asking
         for the body behind `said`.
 
@@ -217,12 +218,20 @@ class ProdClient:
         Parser gets the bytes in direct mode; which endpoint is POSTed to in a
         deployment). `pre` is therefore accepted so callers and transports can
         address the request, and by design does not affect the signed bytes.
+
+        `pvrsn` defaults to match `ProdResponder`'s default (`Vrsn_1_0`), not
+        `prod()`'s own default (`Vrsn_2_0`). A version mismatch between the
+        two sides is not an error -- a version-pinned `Parser` silently drops
+        a message built at a different major version before it ever reaches
+        `Kevery`, so a mismatched request yields no reply, not an exception.
         """
         query = dict(d=said)
         if az is not None:
             query["az"] = az          # spec: no other TOP-LEVEL fields allowed
-        serder = prod(pre=self.hab.pre, route=route, query=query)
-        return self.hab.endorse(serder=serder, last=False, framed=True)
+        serder = prod(pre=self.hab.pre, route=route, query=query,
+                      pvrsn=pvrsn, kind=kind)
+        return self.hab.endorse(serder=serder, last=False, framed=True,
+                                gvrsn=pvrsn)
 
     def harvest(self, serder, said):
         """Body for `said` from a received `bar`, or None if absent."""
