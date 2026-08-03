@@ -98,6 +98,13 @@ def test_an_unauthorized_watcher_gets_nothing():
 
     B sees the anchor -- anchors are public -- but the policy does not admit B,
     so no bar comes back. Anchoring is not consent.
+
+    The withholding assertion is an ASSERTION ON AN ABSENCE, which is satisfied
+    by any failure that produces no bar -- a version skew, an unparsed KEL, a
+    dropped cue. So this first proves a bar DOES come back for the same request
+    under a policy that admits B, then changes only the policy. The contrast is
+    what makes the absence attributable to authorization rather than to
+    something merely being broken.
     """
     with habbing.openHby(name="cuo3", temp=True) as hbyA, \
             habbing.openHby(name="act3", temp=True) as hbyB:
@@ -113,8 +120,20 @@ def test_an_unauthorized_watcher_gets_nothing():
 
         assert [s["d"] for _, s in AnchorWatcher(hab=act, pre=cuo.pre).since(sn=0)] == [said]
 
-        pro = ProdClient(hab=act).request(pre=cuo.pre, said=said, route="sealed")
-        responder = ProdResponder(hab=cuo, kvy=kvyA, disclosable={said: mandate},
-                                  policy=allowList("ESomeoneElse"))
-        parsing.Parser(kvy=kvyA, version=Vrsn_1_0).parse(ims=bytearray(pro), kvy=kvyA)
-        assert responder.service() == bytearray(), "policy did not withhold"
+        # Control: the identical request under a policy that DOES admit B.
+        # Without this, the withholding assertion below cannot tell "denied"
+        # from "the pro never arrived".
+        admitted = ProdResponder(hab=cuo, kvy=kvyA, disclosable={said: mandate},
+                                 policy=allowList(act.pre))
+        parsing.Parser(kvy=kvyA, version=Vrsn_1_0).parse(
+            ims=bytearray(ProdClient(hab=act).request(pre=cuo.pre, said=said, route="sealed")),
+            kvy=kvyA)
+        assert admitted.service(), "control failed: an ADMITTED pro produced no bar either"
+
+        # Same request, same everything, only the policy changes.
+        refused = ProdResponder(hab=cuo, kvy=kvyA, disclosable={said: mandate},
+                                policy=allowList("ESomeoneElse"))
+        parsing.Parser(kvy=kvyA, version=Vrsn_1_0).parse(
+            ims=bytearray(ProdClient(hab=act).request(pre=cuo.pre, said=said, route="sealed")),
+            kvy=kvyA)
+        assert refused.service() == bytearray(), "policy did not withhold"
