@@ -29,7 +29,7 @@ from hio.base import doing
 from hio.help import decking
 
 from .. import help
-from ..core.eventing import bare
+from ..core.eventing import bare, prod
 from ..kering import Kinds, Vrsn_1_0
 
 logger = help.ogler.getLogger()
@@ -194,3 +194,29 @@ class ProdResponderDoer(doing.Doer):
         if msgs := self.responder.service():
             self.send(msgs)
         return False
+
+
+class ProdClient:
+    """The requesting half of prod/bare.
+
+    ProdResponder answers prods; this asks. Correlation is by the requested
+    SAID because bar.a is keyed by it -- and eventing.bare() does not enforce
+    that keying, so harvest() checks rather than assumes.
+    """
+
+    def __init__(self, hab):
+        self.hab = hab
+
+    def request(self, pre, said, route="/sealed", az=None):
+        """Signed `pro` bytes asking `pre` for the body behind `said`."""
+        query = dict(d=said)
+        if az is not None:
+            query["az"] = az          # spec: no other TOP-LEVEL fields allowed
+        serder = prod(pre=self.hab.pre, route=route, query=query)
+        return self.hab.endorse(serder=serder, last=False, framed=True)
+
+    def harvest(self, serder, said):
+        """Body for `said` from a received `bar`, or None if absent."""
+        data = serder.ked.get("a") or {}
+        found = data.get(said)
+        return found if isinstance(found, dict) else None
