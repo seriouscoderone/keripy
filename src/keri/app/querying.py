@@ -169,7 +169,11 @@ class AnchorQuerier(doing.DoDoer):
         if self.pre not in self.hab.kevers:
             return False
 
-        if self.hby.db.fetchLastSealingEventByEventSeal(self.pre, seal=self.anchor):
+        # Use the general seal finder, not the ...ByEventSeal one: the latter
+        # hard-returns None for any seal that is not a SealEvent(i,s,d), so a
+        # SealDigest(d) or SealSource(s,d) anchor could never terminate this
+        # doer and it would poll forever.
+        if self.hby.db.fetchLastSealingEventBySeal(self.pre, seal=self.anchor):
             self.remove([self.witq])
             return True
 

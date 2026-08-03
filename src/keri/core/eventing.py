@@ -4737,11 +4737,15 @@ class Kevery:
         pass
 
     def processPro(self, serder, kwa):
-        """Stub: exchange proposal message; no processing yet."""
+        """Stub: Prod, 'pro', message requesting disclosure of data anchored by
+        a seal in a KEL; a responder would answer with a Bare, 'bar'. Not
+        implemented — messages reaching here are silently discarded."""
         pass
 
     def processBar(self, serder, kwa):
-        """Stub: exchange barrier message; no processing yet."""
+        """Stub: Bare, 'bar', message disclosing data associated with a seal,
+        either solicited by a Prod, 'pro', or unsolicited. Not implemented —
+        messages reaching here are silently discarded."""
         pass
 
     def processAttachedReceiptCouples(self, serder, cigars, *, firner=None,

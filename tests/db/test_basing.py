@@ -2770,3 +2770,65 @@ if __name__ == "__main__":
     test_trim_all_escrows_during_migration()
     test_trim_all_escrows_old_key_format()
     test_semver_dev_tag_comparison()
+
+
+def test_fetch_sealing_event_by_seal_types():
+    """Cover all three seal-finder methods against both a SealDigest(d) anchor
+    and a SealEvent(i,s,d) anchor.
+
+    Regression test for two defects found together:
+
+    * fetchLastSealingEventBySeal never converted the caller's seal dict into
+      the generic Seal namedtuple, so `seal == eseal` compared a dict to a
+      namedtuple and was ALWAYS False -- the method returned None for every
+      seal type. It had zero callers and no test, which is why this went
+      unnoticed.
+    * The two ...ByEventSeal methods deliberately match SealEvent only; that
+      behaviour is asserted here so a future change cannot widen it silently.
+    """
+    from keri.app import habbing
+
+    with habbing.openHby(name="sealfind", temp=True) as hby:
+        hab = hby.makeHab(name="anchorer", isith="1", icount=1)
+
+        # --- anchor a bare digest seal: SealDigest(d) ----------------------
+        dig = "EBqeNn23Hnt5y5cJzpfaXm-1kYylZEdY1AQCuWiQs44J"
+        digest_seal = dict(d=dig)
+        hab.interact(data=[digest_seal])
+        digest_sn = hab.kever.sn
+
+        # --- anchor a full event seal: SealEvent(i,s,d) --------------------
+        event_seal = dict(i=hab.pre, s="0", d=hab.kever.serder.said)
+        hab.interact(data=[event_seal])
+
+        # the SealEvent-only finders must NOT match a SealDigest ...
+        assert hby.db.fetchAllSealingEventByEventSeal(pre=hab.pre,
+                                                      seal=digest_seal) is None
+        assert hby.db.fetchLastSealingEventByEventSeal(pre=hab.pre,
+                                                       seal=digest_seal) is None
+
+        # ... but the general finder must. This is the regression: before the
+        # fix it returned None here.
+        srdr = hby.db.fetchLastSealingEventBySeal(pre=hab.pre, seal=digest_seal)
+        assert srdr is not None
+        assert srdr.sn == digest_sn
+        assert srdr.ilk == Ilks.ixn
+        assert dict(d=dig) in srdr.seals
+
+        # the general finder must agree with the specific one on a SealEvent
+        by_event = hby.db.fetchLastSealingEventByEventSeal(pre=hab.pre,
+                                                           seal=event_seal)
+        by_any = hby.db.fetchLastSealingEventBySeal(pre=hab.pre,
+                                                     seal=event_seal)
+        assert by_event is not None
+        assert by_any is not None
+        assert by_event.said == by_any.said
+
+        # a seal that was never anchored must not match, of any shape
+        absent = "EAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        assert hby.db.fetchLastSealingEventBySeal(pre=hab.pre,
+                                                   seal=dict(d=absent)) is None
+        assert hby.db.fetchLastSealingEventBySeal(
+            pre=hab.pre, seal=dict(i=hab.pre, s="0", d=absent)) is None
+
+    """Done Test"""

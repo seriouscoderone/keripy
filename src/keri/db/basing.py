@@ -1914,6 +1914,10 @@ class Baser(LMDBer):
         """
         # create generic Seal namedtuple class using keys from provided seal dict
         Seal = namedtuple('Seal', list(seal))  # matching type
+        seal = Seal(**seal)  # convert to namedtuple so comparison below is
+        # tuple-to-tuple. Without this, `seal == eseal` compares a dict to a
+        # namedtuple and is always False, so this method returned None for
+        # every seal type. The ...ByEventSeal siblings do the same conversion.
 
         for srdr in self.getEvtLastPreIter(pre=pre, sn=sn):  # only last evt at sn
             for eseal in srdr.seals or []:  # or [] for seals 'a' field missing
