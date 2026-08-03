@@ -182,3 +182,6 @@ examples/schema_host/handler.py
 # keri.host federation: real zone IDs + harvested AIDs are private, never committed
 ecosystems/keri_host/federation.json
 ecosystems/keri_host/federation_aids.json
+
+# subagent-driven-development task reports (throwaway; the work lands in commits)
+.superpowers-report-*.md
