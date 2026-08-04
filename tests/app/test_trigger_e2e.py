@@ -13,10 +13,10 @@ from keri.core.sealing import verifySealedBody
 from keri.kering import Vrsn_1_0
 
 
-def _mandate():
+def _mandate(jurisdiction="US-UT", coverages=("BI", "PD")):
     """A mandate as a real SAD: `d` is its own SAID, exactly like an ACDC."""
     sad = dict(d="", kind="mandate", line_of_business="general_liability",
-               jurisdiction="US-UT", coverages=["BI", "PD"])
+               jurisdiction=jurisdiction, coverages=list(coverages))
     _, saidified = coring.Saider.saidify(sad=dict(sad))
     return saidified, saidified["d"]
 
@@ -45,7 +45,7 @@ def test_watch_then_prod_then_verify():
         assert [s["d"] for _, s in anchors] == [said]
 
         # B prods. A answers under an allowlist that admits B.
-        pro = ProdClient(hab=act).request(pre=cuo.pre, said=said, route="sealed")
+        pro = ProdClient(hab=act).request(pre=cuo.pre, said=said)  # default route
         responder = ProdResponder(hab=cuo, kvy=kvyA, disclosable={said: mandate},
                                   policy=allowList(act.pre))
         parsing.Parser(kvy=kvyA, version=Vrsn_1_0).parse(ims=bytearray(pro), kvy=kvyA)
@@ -59,11 +59,24 @@ def test_watch_then_prod_then_verify():
         assert verifySealedBody(seal={"d": said}, body=got) is True
 
 
-def test_a_tampered_bar_is_rejected_without_trusting_the_sender():
-    """A REAL bar, tampered in flight, is rejected -- the sender is never trusted.
+def test_a_dishonest_responder_cannot_substitute_a_body():
+    """The actual threat model: the sender is untrusted, so the sender lies.
 
-    Built through the responder rather than hand-rolled, so this exercises the
-    delivery path the honest case uses and differs from it only in the tamper.
+    Nothing in prod/bare makes a responder disclose the body it anchored.
+    `ProdResponder` will sign and send whatever its controller put in
+    `disclosable` under the requested SAID, and `bare()` does not enforce the
+    keying either -- so a compromised or malicious A can answer a prod for S
+    with a completely different mandate, and even set that mandate's own `d`
+    to S so the lie is self-consistent.
+
+    The substitution happens ON THE WIRE, in the responder's configuration:
+    the bar A signs and B parses really does carry the wrong body. B never
+    compares it against a local copy -- it has none, that is the whole point of
+    log-triggered retrieval -- it re-derives against the digest it read from
+    A's KEL, and that is what catches this.
+
+    The honest control comes first, through the same path, so the False below
+    is attributable to the substitution and not to a broken transport.
     """
     with habbing.openHby(name="cuo2", temp=True) as hbyA, \
             habbing.openHby(name="act2", temp=True) as hbyB:
@@ -77,20 +90,44 @@ def test_a_tampered_bar_is_rejected_without_trusting_the_sender():
         cuo.interact(data=[dict(d=said)])
         parsing.Parser(kvy=kvyB).parse(ims=bytearray(cuo.replay()), kvy=kvyB)
 
-        pro = ProdClient(hab=act).request(pre=cuo.pre, said=said, route="sealed")
-        responder = ProdResponder(hab=cuo, kvy=kvyA, disclosable={said: mandate},
-                                  policy=allowList(act.pre))
-        parsing.Parser(kvy=kvyA, version=Vrsn_1_0).parse(ims=bytearray(pro), kvy=kvyA)
-        barMsg = responder.service()
-        assert barMsg
+        # Control: an HONEST responder, same request, same delivery.
+        honest = ProdResponder(hab=cuo, kvy=kvyA, disclosable={said: mandate},
+                               policy=allowList(act.pre))
+        parsing.Parser(kvy=kvyA, version=Vrsn_1_0).parse(
+            ims=bytearray(ProdClient(hab=act).request(pre=cuo.pre, said=said)),
+            kvy=kvyA)
+        barMsg = honest.service()
+        assert barMsg, "control failed: the honest responder produced no bar"
+        got = ProdClient(hab=act).harvest(
+            serder=serdering.SerderKERI(raw=bytes(barMsg)), said=said)
+        assert verifySealedBody(seal={"d": said}, body=got) is True
 
-        bar = serdering.SerderKERI(raw=bytes(barMsg))
-        got = ProdClient(hab=act).harvest(serder=bar, said=said)
-        assert verifySealedBody(seal={"d": said}, body=got) is True   # honest baseline
+        # The lie: a DIFFERENT mandate, wearing the requested SAID as its own `d`
+        # so that a consumer inspecting the body sees exactly what it asked for.
+        substitute, otherSaid = _mandate(jurisdiction="US-NV",
+                                         coverages=["BI", "PD", "UM"])
+        assert otherSaid != said
+        substitute = dict(substitute, d=said)
 
-        # The tamper: the jurisdiction B actually cares about, changed in flight.
-        tampered = dict(got, jurisdiction="US-NV")
-        assert verifySealedBody(seal={"d": said}, body=tampered) is False
+        liar = ProdResponder(hab=cuo, kvy=kvyA, disclosable={said: substitute},
+                             policy=allowList(act.pre))
+        parsing.Parser(kvy=kvyA, version=Vrsn_1_0).parse(
+            ims=bytearray(ProdClient(hab=act).request(pre=cuo.pre, said=said)),
+            kvy=kvyA)
+        badMsg = liar.service()
+        assert badMsg, "the dishonest responder sent nothing -- nothing was tested"
+
+        badBar = serdering.SerderKERI(raw=bytes(badMsg))
+        # The substitution really is on the wire: it is in the signed bytes A
+        # produced, filed under the SAID B asked for, and it is not a local edit.
+        assert badBar.ked["a"][said] == substitute
+        assert substitute["jurisdiction"].encode() in badBar.raw
+        assert mandate["jurisdiction"].encode() not in badBar.raw
+
+        lied = ProdClient(hab=act).harvest(serder=badBar, said=said)
+        assert lied != mandate
+        assert lied["d"] == said              # the lie is self-consistent
+        assert verifySealedBody(seal={"d": said}, body=lied) is False
 
 
 def test_an_unauthorized_watcher_gets_nothing():
@@ -126,7 +163,7 @@ def test_an_unauthorized_watcher_gets_nothing():
         admitted = ProdResponder(hab=cuo, kvy=kvyA, disclosable={said: mandate},
                                  policy=allowList(act.pre))
         parsing.Parser(kvy=kvyA, version=Vrsn_1_0).parse(
-            ims=bytearray(ProdClient(hab=act).request(pre=cuo.pre, said=said, route="sealed")),
+            ims=bytearray(ProdClient(hab=act).request(pre=cuo.pre, said=said)),
             kvy=kvyA)
         assert admitted.service(), "control failed: an ADMITTED pro produced no bar either"
 
@@ -134,6 +171,6 @@ def test_an_unauthorized_watcher_gets_nothing():
         refused = ProdResponder(hab=cuo, kvy=kvyA, disclosable={said: mandate},
                                 policy=allowList("ESomeoneElse"))
         parsing.Parser(kvy=kvyA, version=Vrsn_1_0).parse(
-            ims=bytearray(ProdClient(hab=act).request(pre=cuo.pre, said=said, route="sealed")),
+            ims=bytearray(ProdClient(hab=act).request(pre=cuo.pre, said=said)),
             kvy=kvyA)
         assert refused.service() == bytearray(), "policy did not withhold"

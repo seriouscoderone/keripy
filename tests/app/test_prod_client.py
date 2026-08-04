@@ -199,7 +199,9 @@ def test_a_client_built_pro_actually_gets_a_bar_from_a_real_responder():
         parsing.Parser(kvy=kvyB).parse(ims=bytearray(asker.replay()), kvy=kvyB)
 
         from keri.app.prodding import ProdClient, ProdResponder, allowList
-        pro = ProdClient(hab=asker).request(pre=disc.pre, said=said, route="sealed")
+        # No route= on purpose: the DEFAULT route is what gets round-tripped
+        # here, so it cannot drift away from the value a real caller inherits.
+        pro = ProdClient(hab=asker).request(pre=disc.pre, said=said)
 
         responder = ProdResponder(hab=disc, kvy=kvyB, disclosable={said: saidified},
                                   policy=allowList(asker.pre))
