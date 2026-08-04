@@ -1,8 +1,22 @@
 # Fork divergence from WebOfTrust/keripy
 
 Upstream does not accept AI-authored contributions, so these changes are
-permanent. A future upstream merge MUST preserve every row below; each has
-tests that fail without it.
+permanent. Everything described below must survive a future upstream merge.
+
+**This document is a guide, not the checklist.** It is written by hand and it
+goes stale. The authoritative, always-current list of what diverges is:
+
+```
+git diff --stat $(git merge-base origin/main development)..development
+```
+
+Run that first, and reconcile anything it shows that is not described here.
+The prose exists to explain *why* an area diverges and what breaks if it is
+dropped — it cannot enumerate every hunk, and a merger who treats it as
+complete will drop something. The first table covers only the
+log-triggered-retrieval work; § Areas that diverge sketches the rest.
+
+## Log-triggered retrieval (`pro`/`bar`, anchoring, sealing)
 
 | Change | Commit | Why | What breaks if dropped |
 |---|---|---|---|
@@ -12,8 +26,28 @@ tests that fail without it.
 | `Kevery.processPro` / `processBar` implemented | `51a5deef` | Both were `pass` stubs | All prod/bare retrieval |
 | `keri/app/prodding.py` — default-deny disclosure responder | `bb7fda62`, `a742dc96` | Nothing answered a prod. The policy takes the prod itself so it can gate on `q["az"]`; a raising policy fails closed and does not stall the cue drain | Retrieval, and the disclosure-policy safety properties |
 | `keri/app/anchoring.py` — `AnchorWatcher` | this plan | The queriers only wait for *known* anchors; nothing reports new ones | Log-triggered micro-apps |
-| `keri/core/sealing.py` — `verifySealedBody` | this plan | The trust property for log-triggered retrieval, dual-mode: saidify for SADs, plain digest for opaque blobs | Bodies would be trusted by sender rather than by re-derivation; a saidify-blind verifier rejects **every valid ACDC** |
+| `keri/core/sealing.py` — `verifySealedBody` | this plan | The trust property for log-triggered retrieval. Re-derivation is dispatched on the SAD's version string: `SerderACDC` for an ACDC, `SerderKERI` for a KERI message, `Saider.saidify` only for flat unversioned SADs, plain digest for opaque blobs. The body's own `d` is checked against the seal, because `Saider._derive` dummies `d` and so never verifies it | Bodies would be trusted by sender rather than by re-derivation; a saidify-only verifier rejects **every real v2 ACDC** (measured), and without the `d` check a body carries an attacker-chosen identity while verifying True |
 | `keri/app/prodding.py` — `ProdClient` | this plan | Nothing in `src/` ever *sent* a `pro`. Defaults `pvrsn=Vrsn_1_0` to match `ProdResponder` | Retrieval requests; a version mismatch yields **silence**, not an error |
+
+## Areas that diverge, in one line each
+
+Not exhaustive at the hunk level — run the `git diff --stat` above for that.
+These are the *areas*, so that a merger sees they exist.
+
+| Area | What it is |
+|---|---|
+| `src/keri/db/dynamodbing.py` (new, ~1.7k lines) | DynamoDB backend implementing the `LMDBer`/`Baser` store surface, for Lambda. Sets `singleWriter=False`, which is what turns on the first-seen gate in `eventing.py` |
+| `src/keri/db/sqlitedbing.py` (new, ~1.5k lines) | SQLite backend over the same surface, for local/dev runs without LMDB |
+| `src/keri/db/secretkeeper.py` (new) | Keystore backed by AWS Secrets Manager instead of on-disk files |
+| `src/keri/app/lambding.py` (new, ~1k lines) | Lambda entry points and the serverless request/response plumbing |
+| `src/keri/core/eventing.py` (~370 lines beyond `processPro`/`processBar`) | `Kever._claimFirstSeen`/`_supersedeFirstSeen` and the `logEvent(supersede=)` gate — KERI first-seen enforced in code for backends that do **not** serialize writers (no-op on LMDB); `Kevery.authenticateMsg` and `anchoringPre` extracted for the `pro`/`bar` path; `LikelyDuplicitousError` → `escrowLDEvent` on both the inceptive and non-inceptive races; `ldes` escrow writes moved to `OnIoDupSuber.add`; message builders (`state`, `query`, `reply`, `prod`, `bare`, `exchept`, `exchange`) default `kind=Kinds.json` because native CESR cannot represent route-like field labels |
+| `src/keri/core/parsing.py` | `Ilks.pro`/`Ilks.bar` dispatch (table row above) plus `_attachmentGroupVersion` for genus/version skew detection |
+| `src/keri/db/basing.py` | `fetchLastSealingEventBySeal` seal conversion (table row above) **and** the KRAM trans-last-sig store moved from subkey `tsgs.` to `ktsg.` — the fork's KRAM repurposing of `tsgs.` collided with upstream's own `self.tsgs` and broke `rpy`/OOBI routing |
+| `src/keri/db/dbing.py` | `LMDBer.MaxNamedDBs` 100 → 200; the fork opens more named sub-DBs than stock and hit `MDB_DBS_FULL` |
+| `src/keri/kering.py` | `Schemes` gains `wss` (the serverless mailbox is a WebSocket) |
+| `src/keri/vdr/credentialing.py` | `Regery.loadRegistries` repopulates `vcp`/`regd` from the stored TEL inception, so a cold-started process that *loads* a registry can still issue; `Credentialer.create(version=)` passthrough for v1 ACDCs during the v2 transition |
+| `src/keri/app/querying.py` | `AnchorQuerier` completion via the general seal finder (table row above) |
+| top-level `keri_serviceaid/`, `keri_cdk/`, `ecosystems/`, `examples/` (new packages) | The micro-app runtime, the CDK constructs, the EGF fixtures and the worked examples. Not keripy library code, but they live in this repo and `setup.py` packages them |
 
 ## Protocol-version traps this work paid for (keep these; they cost real time)
 
@@ -25,13 +59,26 @@ bite, and each one fails **silently**.
 - **`Habery` emits a v2 KEL by default.** Replaying it through a `Parser(version=Vrsn_1_0)` logs a
   genus-skew warning, leaves the `Kevery` empty, and raises nothing. KEL replay must use the default
   parser; only the `pro`/`bar` exchange is pinned to `Vrsn_1_0`.
-- **`Kevery` needs `lax=True, local=False`** to accept a non-local AID's messages.
+- **`Kevery` accepts a non-local AID's messages under `lax=True, local=False`** — which are its
+  *defaults* in this checkout (`eventing.Kevery.__init__`). The tests pass them explicitly as
+  documentation and as a guard against a future default flip, not because they are required today.
 - **`ProdResponder.service()` returns a `bytearray`,** not a generator. `list()`-ing it iterates
   individual bytes.
 - **A v1 `pro` has no `i` field; a v2 one does.** Assertions on `ked["i"]` silently encode a version
   assumption.
-- **`Saider.saidify` and `Diger(ser=...)` are different computations.** A SAD's SAID dummies the `d`
-  field before digesting. A plain digest over the finished bytes never matches.
+- **Three different computations produce a "SAID", and they disagree.** `Diger(ser=...)` digests
+  finished bytes. `Saider.saidify` dummies the `d` field first, so it never matches a plain digest.
+  And `SerderACDC._compute` — the one that produces a *real* ACDC's SAID — derives it over the most
+  compact variant (nested `s`/`a`/`e`/`r` replaced by their own SAIDs, `v` resized), so it does not
+  match `Saider.saidify` either. Measured: a v2 ACDC from keripy's own `proving.credential`
+  re-derives to a different value under `saidify`. Flat SADs hide this, because for them the two
+  agree.
+- **`Saider._derive` overwrites `sad["d"]` with a dummy before digesting.** The `d` you passed in is
+  never checked. A SAD with `d=None`, `d=12345` or an attacker's SAID verifies just fine unless the
+  caller compares `d` itself.
+- **`Baser.getEvtPreIter` replays superseded duplicates** (its own docstring says so). Use
+  `getEvtLastPreIter` for the accepted KEL. Reading the wrong one means reporting anchors a
+  controller has already repudiated by recovery rotation.
 
 ## Upstream defects found but not fixed here
 
@@ -43,3 +90,12 @@ bite, and each one fails **silently**.
   faithful to both, so nothing to fix in the library.
 - **`bare()` does not enforce the SAID-keyed `a` structure** its docstring
   describes. Callers must not assume the keying; `ProdClient.harvest` checks.
+- **A v2 ACDC's SAID does not commit to its own section SAIDs, nor to the size
+  digits in `v`.** `SerderACDC._compute` recomputes both before digesting, so
+  re-derivation is blind to them. Measured on a real credential: flipping
+  `a["d"]` or `e["d"]` to an attacker's value, or corrupting the `v` size,
+  leaves `verifySealedBody` at `True`; flipping any *content* correctly gives
+  `False`. This is the C3 hole one level down, and it is upstream derivation
+  semantics rather than a fork defect, so it is recorded rather than patched —
+  a consumer that follows a section SAID out of a verified body should
+  recompute it. Nothing in this repo does that today.
