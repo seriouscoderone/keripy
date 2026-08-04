@@ -101,3 +101,20 @@ bite, and each one fails **silently**.
   semantics rather than a fork defect, so it is recorded rather than patched —
   a consumer that follows a section SAID out of a verified body should
   recompute it. Nothing in this repo does that today.
+
+- **`Diger(ser=b"")` raises `EmptyMaterialError` instead of digesting empty
+  input.** `Diger.__init__` (`src/keri/core/coring.py:3735-3739`) wraps its
+  `Matter` init in `except EmptyMaterialError: if not ser: raise ex`, which
+  cannot distinguish "no `ser` was supplied" from "`ser` was supplied and is
+  empty". Blake3 of the empty string is perfectly well defined, and a genuinely
+  0-byte file has a genuine digest, so refusing it is wrong for any caller
+  hashing real files. Hit for real: `ipd-parse` emits an empty
+  `parse-report.jsonl`, and digesting a parse directory crashed on it.
+  Not patched here, because changing `Matter`'s empty-material convention has
+  a blast radius well beyond this need. The workaround, used by
+  `ugard/insurance-product/parser/src/ipd/manifest.py`, is to go through the
+  classmethod directly — `Diger(raw=Diger._digest(b, code=DigDex.Blake3_256),
+  code=DigDex.Blake3_256)` — verified byte-identical to `Diger(ser=b)` for
+  non-empty input across ASCII, multi-byte UTF-8 and all 256 byte values, and
+  verified to produce exactly `blake3(b"").digest()` for empty input. Any other
+  caller that digests file contents will hit this too.
