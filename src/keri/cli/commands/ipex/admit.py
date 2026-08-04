@@ -109,8 +109,11 @@ class AdmitDoer(doing.DoDoer):
 
         # Lets get the latest KEL and Registry if needed
         self.witq.query(src=self.hab.pre, pre=issr)
-        if "ri" in acdc:
-            self.witq.telquery(src=self.hab.pre, pre=issr, ri=acdc["ri"], i=acdc["d"])
+        # v1 ACDCs carry the registry under `ri`, v2 under `rd`. Checking only
+        # `ri` did not crash on a v2 ACDC -- it SKIPPED the TEL query silently,
+        # so a registry-backed v2 credential was admitted without its registry.
+        if (regid := acdc.get("ri") or acdc.get("rd")) is not None:
+            self.witq.telquery(src=self.hab.pre, pre=issr, ri=regid, i=acdc["d"])
 
         for label in ("anc", "iss", "acdc"):
             ked = embeds[label]

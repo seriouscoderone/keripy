@@ -6,7 +6,7 @@ tests.vc.proving module
 import pytest
 
 from keri import (InvalidValueError, Versionage,
-                  Vrsn_1_0, Kinds, Protocols, versify)
+                  Vrsn_1_0, Vrsn_2_0, Kinds, Protocols, versify)
 from keri.core import (Prefixer, Seqner, Diger, Siger,
                        Saider, Number, Seqner, Parser, Salter,
                        Counter, scheming, Schemer,
@@ -312,6 +312,47 @@ def test_credential_parsator():
         assert q["ri"] == issuer.regk
 
     """End Test"""
+
+
+@pytest.mark.parametrize("pvrsn,field,other", [
+    (Vrsn_1_0, "ri", "rd"),
+    (Vrsn_2_0, "rd", "ri"),
+])
+def test_the_registry_field_follows_the_acdc_version(pvrsn, field, other,
+                                                     mockHelpingNowIso8601):
+    """`status` lands in the registry field the ACDC version actually defines.
+
+    ACDC v2 renamed the registry field `ri` -> `rd`; the vendored ACDC v1.1
+    spec uses `rd` throughout and never mentions `ri`. `credential()` wrote
+    `ri` unconditionally, and because the v2 top-level field domain is
+    strict=True, EVERY registry-backed v2 credential raised
+    `SerializeError: Unallowed extra field(s) = ['ri']`. Since credential()'s
+    own default version is v2, that included the default call path.
+    """
+    regk = "ECCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+    creder = credential(schema="EBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+                        issuer="EAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                        data=dict(x=1), status=regk, version=pvrsn)
+
+    assert creder.sad[field] == regk
+    assert other not in creder.sad
+    assert creder.pvrsn == pvrsn
+    # the dual-mode reader must find it under either name
+    assert creder.regid == regk
+
+
+def test_a_registry_backed_credential_works_on_the_default_version(
+        mockHelpingNowIso8601):
+    """The default path must work, because it is the one every caller gets.
+
+    `credential()`'s `version` default resolves to v2, so before the fix this
+    exact call raised. Callers had to know to pass version=Vrsn_1_0 explicitly.
+    """
+    regk = "ECCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+    creder = credential(schema="EBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+                        issuer="EAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                        data=dict(x=1), status=regk)
+    assert creder.regid == regk
 
 
 if __name__ == '__main__':

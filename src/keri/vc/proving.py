@@ -77,7 +77,10 @@ def credential(schema:str,
     )
 
     if status is not None:
-        vc["ri"] = status
+        # ACDC v2 renamed the registry field `ri` -> `rd`; the v2 top-level field
+        # domain is strict, so writing `ri` there raises SerializeError. The
+        # vendored ACDC v1.1 spec uses `rd` throughout and never mentions `ri`.
+        vc["rd" if version.major >= 2 else "ri"] = status
 
     vc |= dict(
         s=schema,

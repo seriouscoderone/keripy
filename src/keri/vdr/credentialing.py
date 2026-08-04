@@ -902,9 +902,13 @@ class Credentialer(doing.DoDoer):
 
         # Additive version passthrough: default None => proving.credential uses its
         # own default (prior behavior preserved for all existing callers). A caller
-        # holding v1 during the KERI v2 transition passes version=Vrsn_1_0 so the
-        # ACDC carries the v1 `ri` registry field instead of v2 `rd` (keripy's v2
-        # ACDC issuance path is not implemented yet).
+        # holding v1 during the KERI v2 transition passes version=Vrsn_1_0.
+        #
+        # `proving.credential` now selects the registry field by version (`ri` for
+        # v1, `rd` for v2), so a v2 ACDC *constructs* correctly. The v2 TEL
+        # issuance path beyond that -- anchoring, Tever state, revocation -- is
+        # still unverified, so do not read a working v2 credential lifecycle into
+        # a v2 ACDC that merely serializes.
         _vkw = {} if version is None else {"version": version}
         creder = credential(issuer=registry.hab.pre,
                             schema=schema,
