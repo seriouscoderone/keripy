@@ -51,8 +51,12 @@ def test_an_unverified_acdc_produces_NO_envelope_at_all():
 
 @pytest.mark.parametrize("missing", ["d", "i"])
 def test_a_missing_required_field_refuses_rather_than_emitting_a_partial(missing):
+    """`match=missing` alone (bare "d" / "i") is not discriminating: the missing-"d"
+    message also matches "i" via the word "missing", and the missing-"i" message also
+    matches "d" via "required"/"produced". Pin the actual field name in the message
+    (`label 'd'` / `label 'i'`) so a wrong-field regression would fail this test."""
     acdc = {k: v for k, v in MANDATE.items() if k != missing}
-    with pytest.raises(EnvelopeError, match=missing):
+    with pytest.raises(EnvelopeError, match=f"label {missing!r}"):
         envelope_for(acdc, verified=True)
 
 
