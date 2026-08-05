@@ -41,6 +41,7 @@ from keri.peer import exchanging
 from keri.vc import protocoling
 from keri.vdr import eventing as teventing, verifying
 
+from ..envelope import envelope_for
 from ..progress import NullSink, ProgressSink
 
 
@@ -161,7 +162,14 @@ def admit_grant(hby, hab, rgy, *, grant_said: str, exc=None, kvy=None,
 
     parsing.Parser().parseOne(ims=bytes(msg), exc=exc, version=_message_version(msg))
 
+    # The envelope every micro-app fold is written against. Built by the SHARED
+    # producer, not assembled here: the watch path in providers/sealed_retrieval.py
+    # must emit an identical shape, and two constructions would drift (§14.5).
+    # `verified=True` is honest here — the credential was parsed and persisted into
+    # reger by the IPEX admit above, and the `reger.saved` check at :152 is what
+    # establishes it.
     sink.on_event("AdmitDoer", "admit_complete",
-                 {"success": True, "credential_said": credential_said})
+                 {"success": True, "credential_said": credential_said,
+                  "envelope": envelope_for(acdc, verified=True)})
 
     return admit_said

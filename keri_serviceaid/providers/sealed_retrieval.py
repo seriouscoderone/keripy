@@ -58,3 +58,21 @@ def credential_said_from_seal(seal: dict, iss_event: dict) -> str:
             f"seal and TEL event disagree about the credential: seal says "
             f"{stated!r}, the committed event says {credential!r}")
     return credential
+
+
+def envelope_from_anchor(seal: dict, iss_event: dict, acdc: dict) -> dict:
+    """The watch path's whole verification, ending in an envelope.
+
+    Step (c) of the chain: the credential must BE the one the TEL event named. Only
+    then is `verified=True` an honest claim, which is why `envelope_for` takes it as a
+    required keyword rather than assuming it.
+    """
+    from keri_serviceaid.envelope import envelope_for
+
+    proven = credential_said_from_seal(seal, iss_event)
+    if (acdc or {}).get("d") != proven:
+        raise SealChainError(
+            f"the supplied ACDC {(acdc or {}).get('d')!r} is not the credential the "
+            f"chain proved ({proven!r}); a well-formed credential that the KEL never "
+            "committed to is exactly the substitution this chain exists to catch")
+    return envelope_for(acdc, verified=True)

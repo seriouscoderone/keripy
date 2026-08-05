@@ -12,7 +12,7 @@ from keri.kering import Vrsn_1_0
 from keri.vdr import eventing as teventing
 
 from keri_serviceaid.providers.sealed_retrieval import (
-    SealChainError, credential_said_from_seal,
+    SealChainError, credential_said_from_seal, envelope_from_anchor,
 )
 
 
@@ -87,3 +87,25 @@ def test_verifySealedBody_alone_REJECTS_the_credential_and_that_is_why_this_modu
     whole module's premise needs re-checking."""
     acdc = {"v": "ACDC10JSON0001ae_", "d": CRED_SAID, "i": "ECuoAid", "s": "ESchema"}
     assert verifySealedBody(SEAL, acdc) is False
+
+
+ACDC = {"v": "ACDC10JSON0001ae_", "d": CRED_SAID,
+        "i": "ECuoAidCuoAidCuoAidCuoAidCuoAidCuoAidCuoAidCuoAid",
+        "ri": "ERegistrySAIDRegistrySAIDRegistrySAIDRegist",
+        "s": "ESchemaSAIDSchemaSAIDSchemaSAIDSchemaSAIDSc",
+        "a": {"d": "EAttr", "line_of_business": "auto"}}
+
+
+def test_the_watch_path_produces_an_envelope_only_after_the_whole_chain_holds():
+    env = envelope_from_anchor(SEAL, ISS, ACDC)
+    assert env["credential_said"] == CRED_SAID
+    assert env["credential_issuer"] == ACDC["i"]
+    assert env["credential_edges"] == {}
+
+
+def test_an_acdc_whose_said_is_not_the_one_the_chain_proved_yields_NO_envelope():
+    """The substitution attack: a real, well-formed credential that is simply not the
+    one the KEL committed to."""
+    other = dict(ACDC, d="EOtherCredOtherCredOtherCredOtherCredOther")
+    with pytest.raises(SealChainError, match="is not the credential"):
+        envelope_from_anchor(SEAL, ISS, other)
