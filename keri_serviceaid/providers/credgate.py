@@ -13,6 +13,45 @@ from keri.kering import Ilks
 from .authz import Allowlist
 
 
+def holds_credential(reger, sender: str, req) -> bool:
+    """True iff `sender` holds — as subject/issuee — a SAVED, TEL-active credential
+    of `req.schema` (from `req.issuer`, when pinned): `reger.schms[schema] ∩
+    reger.subjs[sender]`, confirmed via `reger.saved`, `creder.issuer == req.issuer`,
+    and TEL-active via `reger.tevers`.
+
+    Extracted from `CredentialGate.authorize` (Amendment C §14.3/Task 8) so a second
+    caller — `keri_serviceaid.egf`'s attestation-verification wire, asking "does this
+    arriving attestation's issuer hold the expected role credential" against its OWN
+    `reger` — asks the exact same question rather than re-implementing it. Two
+    mechanisms answering one question and drifting apart is the defect this project
+    keeps paying for; `req` need only duck-type `.schema`/`.issuer` (a bare
+    `CredentialReq`, no route/command shape required).
+    """
+    schema_saids = {s.qb64 for s in reger.schms.get(keys=req.schema.encode("utf-8"))}
+    if not schema_saids:
+        return False
+
+    for saider in reger.subjs.get(keys=sender.encode("utf-8")):
+        said = saider.qb64
+        if said not in schema_saids:
+            continue
+        if reger.saved.get(keys=said) is None:
+            continue                            # not fully verified
+        creder, _prefixer, _number, _diger = reger.cloneCred(said=said)
+        if req.issuer and creder.issuer != req.issuer:
+            continue
+        try:
+            tever = reger.tevers[creder.regid]
+        except KeyError:
+            continue                            # registry TEL not held
+        state = tever.vcState(said)
+        if state is None or state.et in (Ilks.rev, Ilks.brv):
+            continue                            # never issued / revoked
+        return True
+
+    return False
+
+
 class CredentialGate:
     def __init__(self, *, hby, reger, svc, base=None):
         self.hby = hby   # reserved for future issuer key-state checks (Plan 2)
@@ -31,22 +70,7 @@ class CredentialGate:
         if not schema_saids:
             return False, f"no held credential of schema {cred_req.schema}"
 
-        for saider in self.reger.subjs.get(keys=req.sender.encode("utf-8")):
-            said = saider.qb64
-            if said not in schema_saids:
-                continue
-            if self.reger.saved.get(keys=said) is None:
-                continue                            # not fully verified
-            creder, _prefixer, _number, _diger = self.reger.cloneCred(said=said)
-            if cred_req.issuer and creder.issuer != cred_req.issuer:
-                continue
-            try:
-                tever = self.reger.tevers[creder.regid]
-            except KeyError:
-                continue                            # registry TEL not held
-            state = tever.vcState(said)
-            if state is None or state.et in (Ilks.rev, Ilks.brv):
-                continue                            # never issued / revoked
+        if holds_credential(self.reger, req.sender, cred_req):
             return True, ""
 
         return False, (f"sender {req.sender} holds no valid "
