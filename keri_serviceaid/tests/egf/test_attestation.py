@@ -109,3 +109,26 @@ def test_a_verdict_is_immutable_so_a_caller_cannot_flip_ok_after_the_fact():
     v = verify_attestation(acdc=ACDC, egf=_Egf(), tel_state="issued")
     with pytest.raises((AttributeError, TypeError)):
         v.ok = False
+
+
+def test_the_admin_rooting_check_runs_when_the_caller_supplies_the_answer():
+    """The library does not query the vault — the caller does the credgate lookup and
+    passes the boolean. That keeps this module pure and testable, matching
+    egf/onboarding.py's posture of taking an injected resolver and no hby."""
+    v = verify_attestation(acdc=ACDC, egf=_Egf(), tel_state="issued", issuer_holds=True)
+    assert v.ok is True
+    assert v.checks["issuer_admin_rooted"] is True
+
+
+def test_an_issuer_holding_no_role_credential_fails():
+    v = verify_attestation(acdc=ACDC, egf=_Egf(), tel_state="issued", issuer_holds=False)
+    assert v.ok is False
+    assert v.checks["issuer_admin_rooted"] is False
+
+
+def test_omitting_the_admin_rooting_answer_leaves_the_check_ABSENT_not_passing():
+    """§8's whole point: nothing stops an arbitrary AID from anchoring a
+    mandate-shaped attestation. A caller that forgot to ask must not get a verdict
+    that looks like it checked."""
+    v = verify_attestation(acdc=ACDC, egf=_Egf(), tel_state="issued")
+    assert "issuer_admin_rooted" not in v.checks

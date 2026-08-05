@@ -1,11 +1,14 @@
 # -*- encoding: utf-8 -*-
 """Is this attestation one I should believe?
 
-Design spec §7, as amended by §14.2. FOUR of the five checks already existed
+Design spec §7, as amended by §14.2 and §14.3. FOUR of the five checks already existed
 separately — `egf/verify.py::verify_sad`, `EgfDocument.accepted_schema_saids`, keripy's
 TEL state, and edge walking. Their value is in being asked TOGETHER, behind one entry
 point the concierge CLI and the HOA both import, because two mechanisms implementing
-one rule and drifting is the defect this project has already paid for repeatedly.
+one rule and drifting is the defect this project has already paid for repeatedly. The
+fifth — `issuer_admin_rooted` — is Task 7's wire: the caller does the credgate lookup
+(schema + role's authority AID, from `egf/authority.py`) and hands this module the
+boolean, so the check runs alongside the other four in one verdict.
 
 WHAT THIS IS NOT. It does not answer "may this actor do this" — that is
 `providers/credgate.py`, and it gates YOUR OWN surface reveal. This judges an ARRIVING
@@ -38,7 +41,8 @@ class AttestationVerdict:
     failures: tuple = ()
 
 
-def verify_attestation(*, acdc: dict, egf, tel_state, manifest=None) -> AttestationVerdict:
+def verify_attestation(*, acdc: dict, egf, tel_state, manifest=None,
+                       issuer_holds=None) -> AttestationVerdict:
     """Verify an arriving attestation against the ecosystem's rules.
 
     `tel_state` is the caller's TEL read — `"issued"`, `"revoked"`, or None when the
@@ -48,6 +52,13 @@ def verify_attestation(*, acdc: dict, egf, tel_state, manifest=None) -> Attestat
     `manifest`, when given, is `{"raw": bytes, "said": str}` — the ingest manifest the
     actuary's rate program commits to. Absent for attestations that carry none, and its
     check is then absent from the verdict rather than passing vacuously.
+
+    `issuer_holds`, when given, is the caller's answer to "does this ACDC's issuer hold
+    the role credential this ecosystem's authority must have granted" — the credgate
+    lookup this module does not perform itself (it stays pure; no vault, no `reger`).
+    None leaves `issuer_admin_rooted` ABSENT from the verdict rather than True: a caller
+    that forgot to ask must not get a verdict that looks like it checked. §8's point —
+    an attestation is a container for authentic data, never an authorization by itself.
     """
     checks, failures = {}, []
 
@@ -79,6 +90,14 @@ def verify_attestation(*, acdc: dict, egf, tel_state, manifest=None) -> Attestat
             # propagating as an uncaught exception.
             checks["manifest_rederives"] = False
             failures.append(f"the ingest manifest does not re-derive to its SAID: {ex}")
+
+    if issuer_holds is not None:
+        checks["issuer_admin_rooted"] = bool(issuer_holds)
+        if not checks["issuer_admin_rooted"]:
+            failures.append(
+                f"issuer {(acdc or {}).get('i')!r} does not hold the role credential "
+                "this ecosystem's authority must have granted; an attestation is a "
+                "container for authentic data, never an authorization")
 
     return AttestationVerdict(ok=all(checks.values()), checks=checks,
                                failures=tuple(failures))
