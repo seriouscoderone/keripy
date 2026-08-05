@@ -1,6 +1,9 @@
 """The verification library. One implementation, two consumers: the concierge CLI
 and (Plan C2) the HOA. Amendment C §14.2."""
+import json
+
 import pytest
+from keri.core import coring
 
 from keri_serviceaid.egf.attestation import AttestationVerdict, verify_attestation
 
@@ -9,6 +12,15 @@ ACDC = {"v": "ACDC10JSON0001ae_", "d": "ECredSAIDCredSAIDCredSAIDCredSAIDCredSAI
         "i": "ECuoAidCuoAidCuoAidCuoAidCuoAidCuoAidCuoAid",
         "ri": "ERegistrySAIDRegistrySAIDRegistrySAIDRegist",
         "s": SCHEMA, "a": {"d": "EAttr", "line_of_business": "auto"}}
+
+
+def _saidified(doc: dict, label: str = "d") -> "tuple[str, bytes]":
+    """Same helper as test_verify.py::_saidified — build a manifest whose `said`
+    genuinely re-derives from `raw` via the real SAID algorithm, not a fixture where
+    both were hand-typed and merely happen to look plausible."""
+    doc = dict(doc); doc[label] = ""
+    saider, sad = coring.Saider.saidify(sad=doc, label=label)
+    return sad[label], json.dumps(sad).encode()
 
 
 class _Egf:
@@ -79,6 +91,18 @@ def test_a_manifest_missing_a_required_key_fails_closed_rather_than_raising():
     v = verify_attestation(acdc=ACDC, egf=_Egf(), tel_state="issued", manifest=manifest)
     assert v.ok is False
     assert v.checks["manifest_rederives"] is False
+
+
+def test_a_manifest_that_genuinely_rederives_passes_and_the_verdict_is_ok():
+    """The success path. Every other manifest test above is a failure case; without
+    this one, hardcoding the success branch to False would still leave the whole
+    suite green — 'we checked and it failed' would be the only value ever proven."""
+    said, raw = _saidified({"d": "", "files": ["rate_table.csv"]})
+    manifest = {"raw": raw, "said": said}
+    v = verify_attestation(acdc=ACDC, egf=_Egf(), tel_state="issued", manifest=manifest)
+    assert v.checks["manifest_rederives"] is True
+    assert v.ok is True
+    assert v.failures == ()
 
 
 def test_a_verdict_is_immutable_so_a_caller_cannot_flip_ok_after_the_fact():
