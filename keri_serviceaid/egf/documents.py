@@ -210,6 +210,24 @@ class EgfDocument:
         """Roles WITH an onboarding block — the persona picker's source list."""
         return [r for r in self._roles if r.onboarding is not None]
 
+    def micro_apps(self) -> list:
+        """Every micro-app reference, in document order.
+
+        `micro_app_for_role` answers "the app for this role"; this answers "every app
+        this ecosystem declares", which is what a walk keyed by an arriving
+        credential's schema needs — it does not know the role yet, that is what it is
+        trying to find out.
+        """
+        return list(self._micro_apps)
+
+    def credentials_for_holder(self, role_id: str) -> list:
+        """Catalog entries whose holder is `role_id` — empty when none.
+
+        Empty rather than raising: "this role holds no role credential" is a real
+        ecosystem answer a caller must inspect and reject on its own terms.
+        """
+        return [c for c in self._credentials if c.holder_role == role_id]
+
     def role(self, role_id: str) -> Role:
         for r in self._roles:
             if r.id == role_id:
