@@ -92,5 +92,13 @@ def issuer_role_import_for_schema(egf, resolver, schema_said: str) -> dict:
             "accepts a schema nobody is authorised to issue")
 
     credential = held[0]
+    if not credential.issuer_role:
+        raise IssuerRoleUnresolvable(
+            f"the role credential {credential.id!r} that legitimises "
+            f"{producing_role!r} names no issuer_role; the meta-schema permits an "
+            "empty string here, and returning it would reach credgate as an UNPINNED "
+            "requirement — 'holds any credential of this schema, from anyone', which "
+            "is the fail-open this module exists to prevent")
+
     return {"expected_schema_said": credential.schema_said,
             "expected_issuer_role": credential.issuer_role}

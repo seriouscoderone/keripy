@@ -181,3 +181,19 @@ def test_it_is_an_EgfError_so_run_verify_maps_it_to_exit_2():
     from keri_serviceaid.egf.issuer_role import IssuerRoleUnresolvable
 
     assert issubclass(IssuerRoleUnresolvable, EgfError)
+
+
+def test_an_empty_issuer_role_raises_rather_than_pinning_nothing():
+    """The meta-schema allows issuer_role="" (type:string, no minLength), so a valid
+    EGF can carry one. Returned verbatim it becomes CredentialReq(issuer=None), and
+    credgate's `if req.issuer and ...` guard is then skipped entirely."""
+    from keri_serviceaid.egf.issuer_role import (IssuerRoleUnresolvable,
+                                                 issuer_role_import_for_schema)
+
+    sad = _egf_sad()
+    for c in sad["credentials"]:
+        c["issuer_role"] = ""
+    egf = EgfDocument.from_sad(sad)          # still a VALID document
+    with pytest.raises(IssuerRoleUnresolvable) as ex:
+        issuer_role_import_for_schema(egf, _Resolver(_templates()), "E" + "P" * 43)
+    assert "issuer_role" in str(ex.value)
