@@ -168,8 +168,15 @@ def admit_grant(hby, hab, rgy, *, grant_said: str, exc=None, kvy=None,
     # `verified=True` is honest here — the credential was parsed and persisted into
     # reger by the IPEX admit above, and the `reger.saved` check at :152 is what
     # establishes it.
+    #
+    # SPREAD, never nest: the loader's RESERVED_ENVELOPE contract places all three
+    # envelope names at the event's top level, which is where every corpus fold reads
+    # them (`event.credential_edges.<name>`, `event.credential_issuer`). Nested under
+    # an "envelope" key they reach nothing, and because a CEL error inside a map
+    # literal is returned as a state value rather than raised, that failure is silent
+    # (B22). `credential_said` comes from the envelope itself — the same acdc["d"],
+    # one source rather than two that could disagree.
     sink.on_event("AdmitDoer", "admit_complete",
-                 {"success": True, "credential_said": credential_said,
-                  "envelope": envelope_for(acdc, verified=True)})
+                 {"success": True, **envelope_for(acdc, verified=True)})
 
     return admit_said

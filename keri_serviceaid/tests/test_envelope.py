@@ -65,3 +65,14 @@ def test_the_envelope_carries_no_key_outside_RESERVED_ENVELOPE():
     would be read by nothing and mask the absence of a name that IS read."""
     env = envelope_for(ATTESTATION, verified=True)
     assert set(env) == {"credential_said", "credential_issuer", "credential_edges"}
+
+
+def test_every_envelope_key_is_a_reserved_event_top_level_name():
+    """The loader's contract (concierge loader/emission_bindings.py RESERVED_ENVELOPE)
+    places all three envelope names at the TOP level of the event, beside type/said/
+    seq/source_aid/datetime. A sink that nests them satisfies no fold."""
+    from keri_serviceaid.envelope import ENVELOPE_KEYS
+
+    reserved_top_level = {"type", "said", "seq", "source_aid", "datetime",
+                          "credential_said", "credential_issuer", "credential_edges"}
+    assert set(ENVELOPE_KEYS) <= reserved_top_level

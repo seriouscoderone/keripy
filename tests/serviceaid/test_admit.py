@@ -181,8 +181,7 @@ def test_admit_emits_sink_event_on_success(
     acdc = grant.ked["e"]["acdc"]
 
     assert ("AdmitDoer", "admit_complete",
-           {"success": True, "credential_said": delivered_credential_said,
-            "envelope": envelope_for(acdc, verified=True)}) in sink.events
+           {"success": True, **envelope_for(acdc, verified=True)}) in sink.events
 
 
 def test_admit_defaults_processors_when_omitted(
@@ -201,6 +200,33 @@ def test_admit_defaults_processors_when_omitted(
     assert admit_said.startswith("E")
     assert admitter_env.rgy.reger.saved.get(
         keys=(delivered_credential_said,)) is not None
+
+
+def test_admit_event_carries_the_envelope_at_the_top_level_not_nested(
+        admitter_env, delivered_grant_said, delivered_credential_said):
+    """B22: folds read event.credential_issuer and event.credential_edges at the TOP
+    level. Nested under 'envelope' they reach nothing — and a CEL error inside a map
+    literal becomes a state VALUE rather than an error, so the failure is silent and
+    misattributed one event later.
+
+    NOTE the silent-pass trap this test is written around: credential_said is ALSO
+    emitted separately, so a test that checks only credential_said passes even with
+    the bug fully present."""
+    sink = Capture()
+    admit_grant(
+        admitter_env.hby, admitter_env.hab, admitter_env.rgy,
+        grant_said=delivered_grant_said,
+        kvy=admitter_env.kvy, tvy=admitter_env.tvy, vry=admitter_env.vry,
+        sink=sink)
+
+    payload = next(p for src, name, p in sink.events
+                   if (src, name) == ("AdmitDoer", "admit_complete"))
+    assert "envelope" not in payload, "the envelope must be spread, not nested"
+    for key in ("credential_said", "credential_issuer", "credential_edges"):
+        assert key in payload, f"{key} must be readable as event.{key}"
+    assert payload["credential_said"] == delivered_credential_said
+    assert payload["credential_issuer"].startswith("E")
+    assert isinstance(payload["credential_edges"], dict)
 
 
 def test_multisig_hab_raises_not_implemented(
