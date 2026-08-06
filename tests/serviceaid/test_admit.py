@@ -29,6 +29,7 @@ from keri.vdr import eventing as teventing
 
 from _schema import RATING_SCHEMA_SAD
 
+from keri_serviceaid.envelope import envelope_for
 from keri_serviceaid.providers.admit import admit_grant
 from keri_serviceaid.providers.issue import frame_grant_for, issue_credential
 
@@ -173,8 +174,15 @@ def test_admit_emits_sink_event_on_success(
         kvy=admitter_env.kvy, tvy=admitter_env.tvy, vry=admitter_env.vry,
         sink=sink)
 
+    # The admitted ACDC, read the same way admit_grant itself reads it (the
+    # grant exn's own "acdc" embed) — so the expected envelope below is
+    # derived from the real admitted credential, not retyped by hand.
+    grant, _ = exchanging.cloneMessage(admitter_env.hby, delivered_grant_said)
+    acdc = grant.ked["e"]["acdc"]
+
     assert ("AdmitDoer", "admit_complete",
-           {"success": True, "credential_said": delivered_credential_said}) in sink.events
+           {"success": True, "credential_said": delivered_credential_said,
+            "envelope": envelope_for(acdc, verified=True)}) in sink.events
 
 
 def test_admit_defaults_processors_when_omitted(

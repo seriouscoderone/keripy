@@ -5,7 +5,7 @@ extension point = a new module here (new Protocol + default); the pipeline
 never changes. See the framework design spec.
 """
 from .authz import Authorizer, Allowlist
-from .credgate import CredentialGate
+from .credgate import CredentialGate, holds_credential
 from .verify import Verifier, OracleVerifier, VerificationError, KeyState
 from .resolve import Resolver, OracleResolver, BoundResolver, Endpoint
 from .issue import (
@@ -19,7 +19,7 @@ from .apply import frame_apply_for, list_sent_applies, APPLY_ROUTE
 
 __all__ = [
     "Authorizer", "Allowlist",
-    "CredentialGate",
+    "CredentialGate", "holds_credential",
     "Verifier", "OracleVerifier", "VerificationError", "KeyState",
     "Resolver", "OracleResolver", "BoundResolver", "Endpoint",
     "Issuer", "IpexGrantIssuer", "Context",
