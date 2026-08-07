@@ -2615,8 +2615,24 @@ class Reger(LMDBer):
             yield msg
 
     def cloneTvtAt(self, pre, sn=0):
-        snkey = snKey(pre, sn)
+        """Serialized TEL event for `pre` at `sn`.
+
+        Raises MissingEntryError when there is no event at that sn, which is
+        what `cloneTvt` already raises for an event whose raw bytes are absent.
+        Without the guard, `dig` is None and `dgKey(pre, None)` fails deep in
+        string formatting with
+
+            TypeError: %b requires a bytes-like object … not 'NoneType'
+
+        i.e. a caller asking about a credential whose TEL it has not received
+        yet — the normal case while a watch is still catching up — got a
+        TypeError out of a DB accessor instead of this module's own
+        missing-entry signal. See docs/FORK_DIVERGENCE.md.
+        """
         dig = self.tels.get(keys=pre, on=sn)
+        if dig is None:
+            raise MissingEntryError(
+                "Missing TEL event for pre={} at sn={}.".format(pre, sn))
         return self.cloneTvt(pre, dig)
 
     def cloneTvt(self, pre, dig):
