@@ -214,3 +214,75 @@ def test_a_client_built_pro_actually_gets_a_bar_from_a_real_responder():
         got = ProdClient(hab=asker).harvest(serder=bar, said=said)
         rederived, _ = coring.Saider.saidify(sad=dict(got))
         assert rederived.qb64 == said
+
+
+def _round_trip(replyRoute="__default__", route="/sealed"):
+    """Deliver a client-built pro to a real responder; return (pro ked, bar ked)."""
+    from keri.app.prodding import ProdClient, ProdResponder, allowList
+
+    with habbing.openHby(name="rrA", temp=True) as hbyA, \
+            habbing.openHby(name="rrB", temp=True) as hbyB:
+        asker = hbyA.makeHab(name="asker")
+        disc = hbyB.makeHab(name="discloser")
+
+        sad = dict(d="", kind="mandate", jurisdiction="US-UT")
+        _, saidified = coring.Saider.saidify(sad=dict(sad))
+        said = saidified["d"]
+        disc.interact(data=[dict(d=said)])
+
+        kvyB = eventing.Kevery(db=hbyB.db, lax=True, local=False)
+        parsing.Parser(kvy=kvyB).parse(ims=bytearray(asker.replay()), kvy=kvyB)
+
+        kwa = {} if replyRoute == "__default__" else dict(replyRoute=replyRoute)
+        pro = ProdClient(hab=asker).request(pre=disc.pre, said=said,
+                                            route=route, **kwa)
+        responder = ProdResponder(hab=disc, kvy=kvyB,
+                                  disclosable={said: saidified},
+                                  policy=allowList(asker.pre))
+        parsing.Parser(kvy=kvyB, version=Vrsn_1_0).parse(ims=bytearray(pro), kvy=kvyB)
+        barMsg = responder.service()
+        assert barMsg, "no bar produced"
+        return (serdering.SerderKERI(raw=bytes(pro)).ked,
+                serdering.SerderKERI(raw=bytes(barMsg)).ked)
+
+
+def test_the_bar_is_routed_on_the_prods_return_route_not_its_route():
+    """spec: bar.r comes from pro.rr, not pro.r.
+
+    keri-specification.md:2709-2713 -- rr "allows a message to indicate how to
+    target the associated response... on asynchronous transports". The spec's
+    only worked prod/bare example pairs pro.rr "/confidential/process" (:2841)
+    with a bar whose r is "/confidential/process" (:2888).
+
+    Answering on the prod's own `r` sends the disclosure back down the REQUEST
+    channel, which is exactly the correlation a requester cannot disambiguate
+    when several prods are outstanding.
+    """
+    proKed, barKed = _round_trip(replyRoute="/sealed/process", route="/sealed")
+
+    assert proKed["r"] == "/sealed"
+    assert proKed["rr"] == "/sealed/process"
+    assert barKed["r"] == "/sealed/process", (
+        f"bar routed on {barKed['r']!r}; must use the prod's rr")
+
+
+def test_the_client_sends_a_real_return_route_by_default():
+    """An empty rr leaves a responder nothing to fill bar's REQUIRED r with
+    (keri-specification.md:2864-2865), and rr sent empty is what our live
+    deployment did. The default mirrors the spec's own example convention."""
+    proKed, barKed = _round_trip()
+
+    assert proKed["rr"] == "/sealed/process"
+    assert barKed["r"] == "/sealed/process"
+
+
+def test_a_prod_without_a_return_route_still_gets_answered():
+    """The spec contradicts itself on whether rr is mandatory -- :2486-2487
+    says Routed Messages MAY include one, :2817 says all of
+    [v,t,d,dt,r,rr,q] are REQUIRED. So a prod carrying an empty rr is not
+    malformed and must still be answerable; bar.r falls back to the prod's r
+    because bar.r itself is required."""
+    proKed, barKed = _round_trip(replyRoute="", route="/sealed")
+
+    assert proKed["rr"] == ""
+    assert barKed["r"] == "/sealed", "empty rr must fall back to the prod's r"

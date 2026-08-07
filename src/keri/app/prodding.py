@@ -168,7 +168,22 @@ class ProdResponder:
             logger.info("Prod: policy denied %s to %s", said, source)
             return None
 
-        serder = bare(pre=self.hab.pre, route=route, data={said: dict(sad)},
+        # The bar's route is the prod's RETURN route (rr), not its route (r).
+        # rr is what "allows a message to indicate how to target the associated
+        # response" (keri-specification.md:2709-2713), and the spec's only
+        # worked prod/bare example answers rr="/confidential/process" with a
+        # bar whose r is "/confidential/process" (:2841 -> :2888). Answering on
+        # the prod's own `r` -- what this did -- sends the disclosure back on
+        # the REQUEST channel, which is precisely the correlation the requester
+        # has no way to disambiguate on an asynchronous transport.
+        #
+        # Fall back to `r` when a requester sent no rr: the spec is
+        # self-contradictory about whether rr is mandatory (:2486-2487 MAY vs
+        # :2817 REQUIRED), so a prod without one is not malformed, and bar's
+        # `r` IS required (:2864-2865) -- it has to be filled with something.
+        rroute = (cue["serder"].ked.get("rr") or "").strip()
+        serder = bare(pre=self.hab.pre, route=rroute or route,
+                      data={said: dict(sad)},
                       pvrsn=self.pvrsn, kind=self.kind)
         logger.info("Prod: disclosing %s to %s", said, source)
         return self.hab.endorse(serder=serder, last=False, framed=True,
@@ -208,7 +223,7 @@ class ProdClient:
         self.hab = hab
 
     def request(self, pre, said, route="/sealed", az=None, pvrsn=Vrsn_1_0,
-                kind=Kinds.json):
+                kind=Kinds.json, replyRoute=None):
         """Signed `pro` bytes (a `bytearray`, as `Hab.endorse` returns) asking
         for the body behind `said`.
 
@@ -224,11 +239,26 @@ class ProdClient:
         two sides is not an error -- a version-pinned `Parser` silently drops
         a message built at a different major version before it ever reaches
         `Kevery`, so a mismatched request yields no reply, not an exception.
+
+        `replyRoute` is the RETURN ROUTE, `rr`, and it defaults to
+        `f"{route}/process"` rather than to empty. The spec's whole worked
+        example for prod/bare is exactly this pairing -- `pro.rr` of
+        "/confidential/process" answered by a `bar` whose `r` is
+        "/confidential/process" (keri-specification.md:2841 -> :2888) -- and
+        `rr` exists so "a message can indicate how to target the associated
+        response... on asynchronous transports" (:2709-2713). Sending it empty
+        left a responder with nothing to put in `bar`'s REQUIRED `r` field
+        (:2864-2865). Note the spec disagrees with itself on whether `rr` is
+        mandatory: :2486-2487 says Routed Messages "MAY include a return
+        route, `rr` field", while :2817 says all of `[v,t,d,dt,r,rr,q]` are
+        REQUIRED. Sending a real one satisfies both readings.
         """
         query = dict(d=said)
         if az is not None:
             query["az"] = az          # spec: no other TOP-LEVEL fields allowed
         serder = prod(pre=self.hab.pre, route=route, query=query,
+                      replyRoute=replyRoute if replyRoute is not None
+                      else f"{route}/process",
                       pvrsn=pvrsn, kind=kind)
         return self.hab.endorse(serder=serder, last=False, framed=True,
                                 gvrsn=pvrsn)

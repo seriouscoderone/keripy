@@ -28,6 +28,7 @@ log-triggered-retrieval work; § Areas that diverge sketches the rest.
 | `keri/app/anchoring.py` — `AnchorWatcher` | this plan | The queriers only wait for *known* anchors; nothing reports new ones | Log-triggered micro-apps |
 | `keri/core/sealing.py` — `verifySealedBody` | this plan | The trust property for log-triggered retrieval. Re-derivation is dispatched on the SAD's version string: `SerderACDC` for an ACDC, `SerderKERI` for a KERI message, `Saider.saidify` only for flat unversioned SADs, plain digest for opaque blobs. The body's own `d` is checked against the seal, because `Saider._derive` dummies `d` and so never verifies it | Bodies would be trusted by sender rather than by re-derivation; a saidify-only verifier rejects **every real v2 ACDC** (measured), and without the `d` check a body carries an attacker-chosen identity while verifying True |
 | `keri/app/prodding.py` — `ProdClient` | this plan | Nothing in `src/` ever *sent* a `pro`. Defaults `pvrsn=Vrsn_1_0` to match `ProdResponder` | Retrieval requests; a version mismatch yields **silence**, not an error |
+| `keri/app/prodding.py` — `pro`/`bar` honour the RETURN ROUTE `rr` | this fix | The pair ignored `rr` on both sides: `ProdClient.request` had no `replyRoute` parameter and so emitted `rr: ""`, and `ProdResponder.respond` built its `bar` with `route=cue["route"]` — the prod's `r`. But `rr` is the field that "allows a message to indicate how to target the associated response… on asynchronous transports" (keri-specification.md:2709-2713), and the spec's only worked prod/bare example answers `pro.rr` of `/confidential/process` with a `bar` whose `r` is `/confidential/process` (:2841 → :2888). Answering on the prod's own `r` returns the disclosure down the REQUEST channel. `ProdClient` now defaults `rr` to `f"{route}/process"`, mirroring the example's convention; `ProdResponder` routes the `bar` on the prod's `rr`, falling back to `r` when a requester sent none — the spec's own `MAY`/`REQUIRED` contradiction (see below) means a prod without `rr` is not malformed, while `bar.r` IS required (:2864-2865) and must be filled with something | Response correlation on any asynchronous transport: with several prods outstanding a requester cannot tell which disclosure answers which request. Also `bar.r` becomes unconstructible from a `pro` carrying `rr: ""` |
 | `keri/vc/proving.py` — `credential()` picks the registry field by version | this fix | It wrote `vc["ri"] = status` unconditionally. ACDC **v2 renamed `ri` → `rd`** and the v2 top-level field domain is `strict=True`, so **every** registry-backed v2 credential raised `SerializeError: Unallowed extra field(s) = ['ri']` — including the default call path, because `credential()`'s own `version` default resolves to v2. The vendored ACDC v1.1 spec uses `rd` throughout and mentions `ri` **zero times**. Verified present on upstream `main` @ `f4b9e3e8` too, so this is an upstream gap, not fork drift | Any v2 registry-backed ACDC. Callers had to know to pass `version=Vrsn_1_0` |
 | `keri/cli/commands/ipex/admit.py` — TEL query reads `ri` **or** `rd` | this fix | `if "ri" in acdc:` did not crash on a v2 ACDC — it **skipped the TEL query silently**, admitting a registry-backed v2 credential without ever fetching its registry | Registry verification on admit, silently, for v2 ACDCs |
 
@@ -87,9 +88,19 @@ bite, and each one fails **silently**.
 - **`ta` vs `td` on `upd`.** The ACDC spec names `ta` once, in the state-registry
   field table, and `td` 51 times; no `upd` example carries `ta`. The requirement
   (a state update names the ACDC it targets) holds under either reading.
-- **`pro`/`bar` field order: the KERI spec contradicts itself.** The prose omits
-  `i`; the examples include it. keripy v1 matches the prose, v2 the examples —
-  faithful to both, so nothing to fix in the library.
+- **Routed-message field order: the KERI spec contradicts itself, on ALL FOUR types.**
+  Every field-order sentence omits `i` while every corresponding example includes it —
+  `qry` (:2727-2728 vs :2742), `rpy` (:2772-2773 vs :2788), `pro` (:2816-2817 vs :2838),
+  `bar` (:2864-2865 vs :2887). Verified by reading all eight sites. keripy v1 matches the
+  prose, v2 the examples — faithful to both, so nothing to fix in the library.
+  *(This entry previously described the contradiction as a `pro`/`bar` quirk. It is not;
+  it is systematic across the routed-message class.)*
+- **`rr` (Return Route): the KERI spec contradicts itself about whether it is mandatory.**
+  The general rule at :2486-2487 — "The Routed Messages MUST include a route, `r` field,
+  and **MAY** include a return route, `rr` field" — against the per-body rules at :2728
+  (`qry`) and :2817 (`pro`), both of which list `rr` and say "All are REQUIRED". Two
+  MUST-level sentences that disagree. We send a real `rr`, which satisfies either reading.
+  See the `prodding.py` row in the table above for the behaviour this fixed.
 - **`bare()` does not enforce the SAID-keyed `a` structure** its docstring
   describes. Callers must not assume the keying; `ProdClient.harvest` checks.
 - **A v2 ACDC's SAID does not commit to its own section SAIDs, nor to the size
