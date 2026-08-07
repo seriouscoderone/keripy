@@ -1515,6 +1515,17 @@ class Parser:
 
             elif ilk in (Ilks.qry,):  # query message
                 # ToDo neigher kvy.processQuery nor tvy.processQuery actually verify
+                # "source" is NOT a MsgParseDom field, so asdict() never yields it
+                # and the guard below raised KeyError('source') -- not
+                # ValidationError -- for every query whose signature arrived as
+                # cigars rather than lsgs, i.e. every query from a
+                # non-transferable identifier. That KeyError surfaced far from
+                # here as a message-less extraction error, and the query was
+                # dropped before processQuery ever saw it, silently at INFO.
+                # The sibling pro/bar branch below already setdefaults it, and
+                # eventing.py's match-based twin uses kwa.get('source'); this
+                # branch was the one that assumed the key exists.
+                exts.setdefault("source", None)
                 if exts['lsgs']:
                     # use last one if more than one
                     pre, sigers = exts['lsgs'][-1] if exts['lsgs'] else (None, None)

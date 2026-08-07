@@ -4977,3 +4977,49 @@ if __name__ == "__main__":
     test_group_parsator()
     test_parse_native_cesr_fixed_field()
     test_parser_v2_substream()
+
+
+def test_query_signed_by_non_transferable_reaches_processQuery():
+    """A cigar-signed `qry` must be processed, not dropped with KeyError.
+
+    `source` is not a declared `MsgParseDom` field, so `asdict()` never yields
+    it. The qry branch set it only inside `if exts['lsgs']:`, then evaluated
+    `exts['source']` unconditionally -- so every query whose signature arrived
+    as NonTransReceiptCouples (i.e. every query from a NON-TRANSFERABLE
+    identifier) raised KeyError('source') instead of being processed. The
+    KeyError surfaced far from its cause as a message-less
+    "Parser msg extraction error:" and the query was dropped before
+    `Kevery.processQuery` ever saw it -- invisible at INFO.
+
+    Found on a live witness-less direct-mode deployment where the querying
+    wallet signed with its non-transferable listener EID: 896 queries sent,
+    896 extraction errors, zero replays.
+
+    `Kevery.processQuery` itself handles the cigar case fine (`source=None,
+    cigars=[...]`), so this was a parsing defect, not a policy.
+    """
+    from keri.app import habbing
+    from keri.core import parsing, routing, eventing as evt
+
+    with habbing.openHby(name="cigarqry", temp=True) as hby:
+        # A non-transferable asker, as an infrastructure/listener EID is.
+        asker = hby.makeHab(name="listener", transferable=False,
+                            version=Vrsn_1_0)
+        target = hby.makeHab(name="target", version=Vrsn_1_0)
+        assert not asker.kever.prefixer.transferable
+
+        raw = bytes(asker.query(pre=target.pre, src=target.pre, route="logs",
+                                pvrsn=Vrsn_1_0, gvrsn=Vrsn_1_0))
+
+        rvy = routing.Revery(db=hby.db)
+        kvy = evt.Kevery(db=hby.db, lax=True, local=False, rvy=rvy)
+        parsing.Parser(kvy=kvy, rvy=rvy, framed=True,
+                       version=Vrsn_1_0).parse(ims=bytearray(raw), kvy=kvy)
+
+        # The cue is the only honest tell: a failed parse raises nothing and
+        # leaves leftover == 0, because the handler logs via ogler and then
+        # does `del ims[:]`.
+        replays = [c for c in kvy.cues if c.get("kin") == "replay"]
+        assert replays, ("cigar-signed query produced no replay cue -- it was "
+                         "dropped before processQuery")
+        assert replays[0]["pre"] == target.pre
