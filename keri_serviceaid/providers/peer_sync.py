@@ -115,6 +115,27 @@ def body_request(hab, said: str, *, peer_pre: str | None = None) -> bytes:
                                          anchorPre=peer_pre))
 
 
+def introduced(hab, msg: bytes) -> bytes:
+    """`msg` prefixed with the sender's own KEL, so a peer can authenticate it.
+
+    A responder verifies a signed `qry`/`pro` against the sender's key state,
+    and drops it as "Unknown sender" when it has never seen that AID -- at
+    DEBUG, with no cue and no reply. Measured live: 32 prods dropped this way,
+    invisible at INFO, while the request itself was perfectly well formed.
+
+    Pairing does not reliably cover this. An identifier minted AFTER the peers
+    paired -- which is exactly what a freshly-opened HOA workspace does -- was
+    never in the blob they exchanged, so its first request is from a stranger.
+
+    Prepending the KEL rather than tracking who-has-been-told keeps this
+    STATELESS: it stays correct when the peer restarts, wipes its store, or
+    was never told in the first place, and duplicate key events are idempotent
+    on the receiving side. A KEL replay is a few hundred bytes against a
+    request that only fires when a body is actually missing.
+    """
+    return bytes(hab.replay()) + bytes(msg)
+
+
 def missing_bodies(reger, saids) -> list[str]:
     """Of `saids`, those whose credential body is NOT already local.
 
