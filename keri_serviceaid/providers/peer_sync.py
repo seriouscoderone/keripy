@@ -29,6 +29,7 @@ CLI and a service share one implementation instead of three.
 """
 from __future__ import annotations
 
+from keri import help
 from keri.app.prodding import ProdClient
 
 #: The KEL-replay query route. `Kevery.processQuery` dispatches on the bare
@@ -37,6 +38,8 @@ LOGS_ROUTE = "logs"
 
 #: The seal-oriented retrieval route Plan A's ProdResponder answers on.
 SEALED_ROUTE = "/sealed"
+
+logger = help.ogler.getLogger(__name__)
 
 
 def signing_hab(hby, preferred_alias: str | None = None):
@@ -233,4 +236,60 @@ def ingest_response(hby, raw, *, verifier=None, exc=None, version=None) -> int:
     kvy.processEscrows()
     if tvy is not None:
         tvy.processEscrows()
+
+    _store_disclosed(kvy, verifier)
     return _height() - before
+
+
+def _store_disclosed(kvy, verifier) -> int:
+    """Persist bodies disclosed by a `bar`. Returns how many were stored.
+
+    `Kevery.processBar` VERIFIES a disclosed body -- it checks the `a` block is
+    SAID-keyed, that each body re-derives to the SAID it is filed under, and
+    that the SAID is anchored in the discloser's KEL -- and then pushes
+    `dict(kin="bare", ...)` onto its cues and does nothing else. NOTHING in
+    keripy, keri_serviceaid or locksmith drains that cue, so the verified body
+    was reached and dropped.
+
+    On the wire that looked like success: the prod was answered, the bar
+    arrived, no error was logged anywhere. But `missing_bodies` asks
+    `reger.creds`, never found it, and asked again -- so a watch retrieved the
+    same credential every 5 seconds forever and never held it.
+
+    Storage is deliberately narrow. Only a body whose SAD looks like an ACDC is
+    persisted, because `reger.creds` is typed `SerderACDC` and a `bar` may
+    carry any SAD. This is RETRIEVAL, not issuance: it records the body, not
+    the anchoring event's provenance (`saveCred`'s `cancs` triple), because the
+    authority here comes from processBar's anchor check rather than from our
+    own issuance bookkeeping.
+    """
+    reger = getattr(verifier, "reger", None)
+    if reger is None:
+        return 0
+
+    from keri.core.serdering import SerderACDC
+
+    stored, held = 0, []
+    while kvy.cues:
+        cue = kvy.cues.pull()
+        if cue.get("kin") != "bare":
+            held.append(cue)
+            continue
+        said, sad = cue.get("said"), cue.get("sad")
+        if not said or not isinstance(sad, dict):
+            continue
+        if not str(sad.get("v", "")).startswith("ACDC"):
+            logger.debug("peer_sync.disclosed_not_acdc said=%s", str(said)[:12])
+            continue
+        try:
+            reger.creds.put(keys=(said,), val=SerderACDC(sad=sad))
+            stored += 1
+            logger.info("peer_sync.stored said=%s", str(said)[:12])
+        except Exception:               # noqa: BLE001
+            logger.exception("peer_sync.store_failed said=%s", str(said)[:12])
+
+    # Put back what we did not consume, in order -- this deck is shared with
+    # whatever else services the Kevery.
+    for cue in held:
+        kvy.cues.push(cue)
+    return stored
