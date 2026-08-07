@@ -39,14 +39,59 @@ LOGS_ROUTE = "logs"
 SEALED_ROUTE = "/sealed"
 
 
+def signing_hab(hby, preferred_alias: str | None = None):
+    """The hab a sync query must be signed with, or None if there is none.
+
+    MUST be TRANSFERABLE, and that is a protocol requirement rather than a
+    preference. A non-transferable signer attaches NonTransReceiptCouples
+    (cigars) instead of an indexed-signature group, and keripy's
+    `parsing.msgProcess` then evaluates `exts['source']` at
+    `parsing.py:1526` — a key `MsgParseDom` does not declare, populated only
+    on the `lsgs` branch. The query dies with `KeyError: 'source'` BEFORE
+    `Kevery.processQuery` is reached, so nothing replays and nothing is
+    logged at INFO. (The sibling logic in `eventing.py:4672` uses
+    `.get('source')` and is correct; `parsing.py` is the drifted twin.)
+
+    Prefers `preferred_alias` so the query is attributable to the user's own
+    identifier rather than to whichever hab happens to be first in the dict
+    — `hby.habs` also holds infrastructure EIDs such as locksmith's
+    non-transferable "peer-listener".
+    """
+    if preferred_alias:
+        hab = hby.habByName(preferred_alias)
+        if hab is not None and hab.kever.prefixer.transferable:
+            return hab
+    for hab in hby.habs.values():
+        if hab.kever.prefixer.transferable:
+            return hab
+    return None
+
+
 def kel_sync_request(hab, peer_pre: str) -> bytes:
     """Signed `qry` bytes asking `peer_pre` to replay ITS OWN KEL.
 
     `pre` and `src` are both the peer: we are asking that identifier, about
     that identifier. `Hab.query` signs with the asking hab, so the answering
     side can attribute the request.
+
+    The protocol version is pinned to the SIGNING HAB'S OWN KEL version
+    rather than left to default. `eventing.query`'s `version` parameter
+    defaults to the module-level `Version` — currently v2 — regardless of
+    what the hab or the deployment actually speaks, so the default mints a
+    v2 body even for a v1 identifier. A parser whose stream genus is v1
+    rejects that at `serdering.py:196` with `DeserializeError: Incompatible
+    message protocol major version=2 with stream genus major version=1`,
+    which `groupParsator` re-wraps at `parsing.py:910` as a BARE
+    `ExtractionError` — hence the message-less "Parser msg extraction
+    error:" and a query dropped before it is ever processed.
+
+    Deriving from `hab` instead of hardcoding a version keeps this module
+    protocol-neutral: a v1 identifier asks in v1, a v2 identifier asks in
+    v2, and no consumer inherits another consumer's transitional pin.
     """
-    return bytes(hab.query(pre=peer_pre, src=peer_pre, route=LOGS_ROUTE))
+    vrsn = hab.kever.serder.pvrsn
+    return bytes(hab.query(pre=peer_pre, src=peer_pre, route=LOGS_ROUTE,
+                           pvrsn=vrsn, gvrsn=vrsn))
 
 
 def body_request(hab, said: str, *, peer_pre: str | None = None) -> bytes:
@@ -56,6 +101,14 @@ def body_request(hab, said: str, *, peer_pre: str | None = None) -> bytes:
     there is one construction of a prod in the codebase. `peer_pre` is a
     routing selector only — a `pro` carries no recipient, and which peer
     receives it is decided by delivery (see ProdClient.request's docstring).
+
+    DELIBERATELY takes no version argument, unlike `kel_sync_request` above.
+    `ProdClient.request` already defaults `pvrsn=Vrsn_1_0` explicitly
+    (`prodding.py:210`, with a docstring saying so), so a `pro` is minted v1
+    and needs no correction — measured against the live wire, where every
+    logged extraction error paired with a `qry` and never once with a `pro`.
+    Adding a version pin here would be a fix for a bug this path does not
+    have.
     """
     return bytes(ProdClient(hab).request(pre=peer_pre or hab.pre, said=said,
                                          route=SEALED_ROUTE))
