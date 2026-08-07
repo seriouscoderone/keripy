@@ -4889,6 +4889,14 @@ class Kevery:
                                               sigers=sigers, cigars=cigars)
             msg = (f"Prod not found error on route={route} for SAID={said} "
                    f"SAID={serder.said}")
+            # INFO, not DEBUG. This is the branch that silently swallows every
+            # unanswerable prod, and a deployment logging at INFO therefore saw
+            # a responder that emitted nothing and no reason anywhere. Name the
+            # SAID and the KELs actually searched -- an empty `pres` (no local
+            # prefixes) and a genuinely unanchored SAID are indistinguishable
+            # failures otherwise, and we burned a night on exactly that.
+            logger.info("Prod: %s not anchored in any of %r -- no cue (route=%s)",
+                        said, [p[:12] for p in pres], route)
             logger.debug(msg)
             logger.debug("Prod Body=\n%s\n", serder.pretty())
             raise QueryNotFoundError(msg)

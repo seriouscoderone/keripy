@@ -111,7 +111,8 @@ def body_request(hab, said: str, *, peer_pre: str | None = None) -> bytes:
     have.
     """
     return bytes(ProdClient(hab).request(pre=peer_pre or hab.pre, said=said,
-                                         route=SEALED_ROUTE))
+                                         route=SEALED_ROUTE,
+                                         anchorPre=peer_pre))
 
 
 def missing_bodies(reger, saids) -> list[str]:

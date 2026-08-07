@@ -223,7 +223,7 @@ class ProdClient:
         self.hab = hab
 
     def request(self, pre, said, route="/sealed", az=None, pvrsn=Vrsn_1_0,
-                kind=Kinds.json, replyRoute=None):
+                kind=Kinds.json, replyRoute=None, anchorPre=None):
         """Signed `pro` bytes (a `bytearray`, as `Hab.endorse` returns) asking
         for the body behind `said`.
 
@@ -254,6 +254,15 @@ class ProdClient:
         REQUIRED. Sending a real one satisfies both readings.
         """
         query = dict(d=said)
+        if anchorPre is not None:
+            # WHOSE KEL anchors it. processPro reads `pres = [qry["i"]] if "i"
+            # in qry else list(self.prefixes)` -- so without this the responder
+            # falls back to its OWN local prefixes, and can only answer for
+            # AIDs it happens to be controller for and has loaded. The asker
+            # always knows this: it read the anchor out of a specific peer's
+            # KEL. Naming it removes a whole class of silent non-answer, and
+            # the spec's own `pro` example carries `i` in the q block.
+            query["i"] = anchorPre
         if az is not None:
             query["az"] = az          # spec: no other TOP-LEVEL fields allowed
         serder = prod(pre=self.hab.pre, route=route, query=query,
