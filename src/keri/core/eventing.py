@@ -4805,17 +4805,42 @@ class Kevery:
 
 
     def anchoringPre(self, said, pres):
-        """Return the first AID in pres whose KEL anchors a digest seal for said.
+        """Return the first AID in pres whose KEL commits to said by ANY seal.
 
         Returns None when no candidate KEL anchors it.
+
+        This asks a VALUE question -- "did this controller commit to this
+        digest?" -- not a TYPE question. It used to ask
+        `db.fetchLastSealingEventBySeal(pre, seal=dict(d=said))`, and that
+        can only ever match a BARE DIGEST seal: `fetchLastSealingEventBySeal`
+        guards with `if tuple(eseal) == Seal._fields` (basing.py:1924) and
+        `Seal._fields` is `('d',)`. Credential issuance anchors a THREE-field
+        `SealEvent(i, s, d)` (`vdr/eventing.py:348,402`), so
+        `('i','s','d') != ('d',)` and every issued credential looked
+        unanchored. `processPro` then raised QueryNotFoundError and never
+        cued, so nothing could answer a `pro` for a real credential no matter
+        how correctly a responder was wired. Measured on a live deployment:
+        538 prods, zero replies.
+
+        Both `d` and `i` count as committed, because for an issuance seal they
+        are two different true statements about the same commitment:
+        `credentialing.py:628` anchors `pre=vcid, regd=iserder.said`, i.e.
+        `i` is the ACDC's SAID and `d` is the TEL event's SAID. A prod naming
+        either is naming something this KEL really did commit to.
 
         Parameters:
             said (str): qb64 SAID committed to by the seal
             pres (list[str]): candidate AIDs whose KELs to search
         """
         for pre in pres:
-            if self.db.fetchLastSealingEventBySeal(pre=pre, seal=dict(d=said)):
-                return pre
+            for srdr in self.db.getEvtLastPreIter(pre=pre):
+                for eseal in srdr.seals or []:
+                    if not isinstance(eseal, dict):
+                        continue
+                    if said in (eseal.get("d"), eseal.get("i")):
+                        # Same witness guard fetchLastSealingEventBySeal applies.
+                        if self.db.fullyWitnessed(srdr):
+                            return pre
         return None
 
 

@@ -895,3 +895,53 @@ def test_unsigned_pro_is_rejected():
             ims=bytearray(serder.raw), kvy=kvyA)  # no signature attached
 
         assert responder.service() == bytearray(), "unsigned pro was answered"
+
+
+def test_a_credential_issuance_seal_is_found_as_an_anchor():
+    """A `pro` for a really-issued credential must reach a cue.
+
+    Credential issuance anchors a THREE-field SealEvent(i, s, d) into the KEL
+    (vdr/eventing.py:348,402; credentialing.py:628 passes pre=vcid,
+    regd=iserder.said -- so `i` is the ACDC SAID and `d` is the TEL event's).
+    `Kevery.anchoringPre` asked `fetchLastSealingEventBySeal(seal=dict(d=said))`,
+    which guards on `tuple(eseal) == Seal._fields` == ('d',) -- so a 3-field
+    seal never matched and every issued credential looked UNANCHORED.
+    processPro then raised QueryNotFoundError and pushed no cue, so no
+    responder could answer. Measured live: 538 prods sent, 0 replies.
+
+    Every pre-existing fixture in this file anchors a bare {'d': said} seal,
+    which is exactly why this shipped green.
+    """
+    from keri.app import habbing
+    from keri.core import eventing as evt
+
+    with habbing.openHby(name="anchsl", temp=True) as hby:
+        hab = hby.makeHab(name="issuer")
+
+        acdcSaid = "E" + "A" * 43        # stands in for the credential SAID
+        telSaid = "E" + "B" * 43         # stands in for the TEL iss event SAID
+        # The shape credentialing.py actually writes.
+        hab.interact(data=[dict(i=acdcSaid, s="0", d=telSaid)])
+
+        kvy = evt.Kevery(db=hby.db, lax=True, local=False)
+
+        assert kvy.anchoringPre(said=telSaid, pres=[hab.pre]) == hab.pre, (
+            "the seal's own d was not found -- anchor lookup is broken")
+        assert kvy.anchoringPre(said=acdcSaid, pres=[hab.pre]) == hab.pre, (
+            "the credential SAID carried in the seal's i was not found")
+        assert kvy.anchoringPre(said="E" + "Z" * 43, pres=[hab.pre]) is None, (
+            "an uncommitted SAID must NOT look anchored")
+
+
+def test_a_bare_digest_seal_still_resolves():
+    """The old shape must keep working -- every other fixture here uses it."""
+    from keri.app import habbing
+    from keri.core import eventing as evt
+
+    with habbing.openHby(name="anchbare", temp=True) as hby:
+        hab = hby.makeHab(name="issuer")
+        said = "E" + "C" * 43
+        hab.interact(data=[dict(d=said)])
+
+        kvy = evt.Kevery(db=hby.db, lax=True, local=False)
+        assert kvy.anchoringPre(said=said, pres=[hab.pre]) == hab.pre
