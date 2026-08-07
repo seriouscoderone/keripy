@@ -196,11 +196,19 @@ def ingest_response(hby, raw, *, verifier=None, exc=None, version=None) -> int:
         tvy = Tevery(reger=verifier.reger, db=hby.db, local=False, rvy=rvy)
         tvy.registerReplyRoutes(router=rvy.rtr)
 
-    before = len(hby.kevers)
+    # Count EVENTS, not identifiers. len(hby.kevers) counts how many AIDs we
+    # know, which goes to zero delta the moment a peer is known at all — so a
+    # watch reporting on it says "0" forever while the very KEL growth it
+    # exists to observe streams past. What a watch cares about is a peer's KEL
+    # getting LONGER: that is where the next anchor lives.
+    def _height():
+        return sum(kev.sn + 1 for kev in hby.kevers.values())
+
+    before = _height()
     parsing.Parser(kvy=kvy, tvy=tvy, rvy=rvy, vry=verifier, exc=exc,
                    framed=True, version=version).parse(
                        ims=bytearray(raw), kvy=kvy, tvy=tvy, rvy=rvy, vry=verifier)
     kvy.processEscrows()
     if tvy is not None:
         tvy.processEscrows()
-    return len(hby.kevers) - before
+    return _height() - before
