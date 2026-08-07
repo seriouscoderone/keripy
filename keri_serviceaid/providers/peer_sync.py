@@ -147,3 +147,60 @@ def anchored_saids(watcher, since=None) -> list[str]:
         if said:
             found.append(said)
     return found
+
+
+def ingest_response(hby, raw, *, verifier=None, exc=None, version=None) -> int:
+    """Parse a peer's reply into our own dbs. Returns events newly accepted.
+
+    THE OTHER HALF OF ASKING. locksmith's peer transport is push-only —
+    `peer_send` opens a connection, writes, and closes it — so a responder's
+    reply lands in a socket the asker has already hung up on. Measured on a
+    live deployment: the responder logged "Server peer-listener: sent chit or
+    receipt or replay: 459" every 5s while the asking side's registry held
+    zero bodies and re-requested the same SAIDs forever. The queries were
+    answered; nobody was listening.
+
+    Mirrors the Reactant's processing stack (locksmith
+    turret/directing.py:536-575) rather than inventing one, so a reply read
+    off a socket is processed exactly as a reply pushed to a listener would
+    be:
+
+      * `lax=False, local=False` — a peer's KEL is strictly verified.
+      * `tvy` from the verifier's reger, else streamed registry TEL events
+        (vcp/iss) are dropped with "No tevery to process".
+      * `vry=verifier` — else a bare ACDC has nowhere to route and is dropped
+        with "No verifier to process so dropped ACDC=...".
+      * reply routes registered on the Revery, else `rpy` is unroutable.
+
+    `version` defaults to the version of the reply itself. A parser pinned to
+    the wrong genus drops every message and raises NOTHING — the failure this
+    module's own history is made of.
+    """
+    from keri import kering
+    from keri.core import eventing, parsing, routing
+    from keri.vdr.eventing import Tevery
+
+    if not raw:
+        return 0
+
+    if version is None:
+        version = (kering.smell(raw).pvrsn if kering.sniff(raw) == kering.Colds.msg
+                   else kering.Vrsn_2_0)
+
+    rvy = routing.Revery(db=hby.db)
+    kvy = eventing.Kevery(db=hby.db, lax=False, local=False, rvy=rvy)
+    kvy.registerReplyRoutes(router=rvy.rtr)
+
+    tvy = None
+    if verifier is not None:
+        tvy = Tevery(reger=verifier.reger, db=hby.db, local=False, rvy=rvy)
+        tvy.registerReplyRoutes(router=rvy.rtr)
+
+    before = len(hby.kevers)
+    parsing.Parser(kvy=kvy, tvy=tvy, rvy=rvy, vry=verifier, exc=exc,
+                   framed=True, version=version).parse(
+                       ims=bytearray(raw), kvy=kvy, tvy=tvy, rvy=rvy, vry=verifier)
+    kvy.processEscrows()
+    if tvy is not None:
+        tvy.processEscrows()
+    return len(hby.kevers) - before
