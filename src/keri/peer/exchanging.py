@@ -636,13 +636,35 @@ def serializeMessage(hby, said, framed=False):
         msg (bytearray):  message by said with attachments
 
     """
-    atc = bytearray()
-
     exn = hby.db.exns.get(keys=(said,))
     if exn is None:
-        return None, None
+        return None
 
-    atc.extend(exn.raw)
+    # FORK FIX (2026-08-08): `atc` holds the ATTACHMENTS ONLY. Upstream seeded it
+    # with `exn.raw` -- the JSON message body -- and then applied two rules that
+    # are true of CESR attachments and false of a JSON body:
+    #
+    #   1. `if len(atc) % 4: raise ValueError("Invalid attachments size=...,
+    #      nonintegral quadlets.")`. A JSON body's length mod 4 is arbitrary, so
+    #      this raised on roughly three exns in four. Measured live:
+    #      "Invalid attachments size=489, nonintegral quadlets." on every IPEX
+    #      admit-back in Locksmith (489 % 4 == 1).
+    #   2. For `framed=False`, the AttachmentGroup counter was sized
+    #      `(len(body) + len(attachments)) // 4` and emitted BEFORE the body,
+    #      producing `[counter][body][attachments]` -- a count that describes the
+    #      wrong bytes, in the wrong place. Correct is `[body][counter][attachments]`
+    #      with the counter sizing the attachments alone.
+    #
+    # For `framed=True` the returned bytes are UNCHANGED (body then attachments,
+    # no counter); the function simply stops raising. For `framed=False` the layout
+    # is corrected as above, which also makes a caller that strips `exn.size` bytes
+    # off the front land exactly on the counter instead of mid-body.
+    #
+    # Also returns a bare `None` when the exn is absent, not `(None, None)`. Every
+    # caller assigns the result to one name and truth-tests or indexes it, and a
+    # 2-tuple is TRUTHY -- so the not-found path defeated `if not atc:` guards and
+    # failed later, further from the cause.
+    atc = bytearray()
 
     tsgs, cigars = verify(hby=hby, serder=exn)
 
@@ -675,11 +697,11 @@ def serializeMessage(hby, said, framed=False):
                                   count=(len(p) // 4), version=Vrsn_1_0).qb64b)
         atc.extend(p.encode("utf-8"))
 
-    msg = bytearray()
-
     if len(atc) % 4:
         raise ValueError("Invalid attachments size={}, nonintegral"
                          " quadlets.".format(len(atc)))
+
+    msg = bytearray(exn.raw)
 
     if not framed:
         msg.extend(Counter(Codens.AttachmentGroup,
