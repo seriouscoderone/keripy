@@ -36,6 +36,10 @@ from keri.app.prodding import ProdClient
 #: string "logs" (not "/logs") — see its `if route == "logs":` branch.
 LOGS_ROUTE = "logs"
 
+#: TEL replay. `Tevery.processQuery` answers this with the registry's TEL plus,
+#: when `q["i"]` is set, that credential's own TEL.
+TELS_ROUTE = "tels"
+
 #: The seal-oriented retrieval route Plan A's ProdResponder answers on.
 SEALED_ROUTE = "/sealed"
 
@@ -95,6 +99,54 @@ def kel_sync_request(hab, peer_pre: str) -> bytes:
     vrsn = hab.kever.serder.pvrsn
     return bytes(hab.query(pre=peer_pre, src=peer_pre, route=LOGS_ROUTE,
                            pvrsn=vrsn, gvrsn=vrsn))
+
+
+def tel_sync_request(hab, issuer_pre: str, registry_said: str,
+                     vc_said: str) -> bytes:
+    """Signed `qry` bytes asking `issuer_pre` to replay a credential's TEL.
+
+    A disclosed body is not enough to act on. The ACDC spec separates the two
+    artifacts: the Registry inception's SAID "MUST be anchored in the Issuer's
+    KEL as the Registry proof seal", update events "MUST also be anchored", and
+    a validator "can look up the seal in the Issuer's KEL and verify that the
+    SAID of the Transaction Event is the SAID in the seal"
+    (acdc-specification.md:3636-3651). The seal lives in the KEL; the
+    Transaction Event it commits to lives in the TEL. Holding the seal and the
+    body without the TEL leaves issued-vs-revoked unestablished, which is
+    exactly the state a `bar` alone leaves a reader in.
+
+    The same passage permits either delivery — the state proof "MAY be attached
+    to the presentation or MAY be provided Out-Of-Band". This is the
+    out-of-band half, chosen so a `bar` stays a pure SAD disclosure and the
+    reader does its own asking: the discloser does not get to decide what proof
+    the reader is satisfied with.
+
+    `q` carries `ri` (the registry), `i` (the credential) and `src` — all three
+    are read by `Tevery.processQuery`'s `tels` branch, and only `Hab.query`
+    fills in `src`, so this must not be built from `vdr.eventing.query`.
+
+    Version-pinned from the signing hab for the same reason
+    `kel_sync_request` is: a v2 body reaching a v1-genus parser is dropped as a
+    bare ExtractionError, with no error anyone can see.
+    """
+    vrsn = hab.kever.serder.pvrsn
+    return bytes(hab.query(pre=vc_said, src=issuer_pre, route=TELS_ROUTE,
+                           query=dict(ri=registry_said),
+                           pvrsn=vrsn, gvrsn=vrsn))
+
+
+def registry_of(sad) -> str | None:
+    """The registry SAID an ACDC names, across ACDC versions.
+
+    v1 calls it `ri`; v2 renamed it to `rd` (the vendored ACDC v1.1 spec uses
+    `rd` throughout and mentions `ri` zero times — see keripy
+    docs/FORK_DIVERGENCE.md, where reading only one of the two silently skipped
+    the TEL query on admit). Reads both so a caller never has to know which
+    version minted the credential.
+    """
+    if not isinstance(sad, dict):
+        return None
+    return sad.get("ri") or sad.get("rd") or None
 
 
 def body_request(hab, said: str, *, peer_pre: str | None = None) -> bytes:
