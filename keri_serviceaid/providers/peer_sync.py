@@ -217,13 +217,71 @@ def anchored_saids(watcher, since=None) -> list[str]:
     seal's `i` is the anchored SAID. Wrapping it here keeps callers from
     reaching into seal internals in three places, and keeps this module the
     one thing that knows what a watch produces.
+
+    Note this LOSES the seal's `d`, which is what tells a registry event from a
+    credential event — see `credential_anchors`. A caller deciding what to `pro`
+    for wants that one, not this.
     """
-    found = []
-    for _sn, seal in watcher.since(since if since is not None else watcher.checkpoint):
-        said = (seal or {}).get("i")
-        if said:
-            found.append(said)
-    return found
+    return [(seal or {}).get("i")
+            for _sn, seal in anchored_seals(watcher, since=since)
+            if (seal or {}).get("i")]
+
+
+def anchored_seals(watcher, since=None):
+    """The `(sn, seal)` pairs anchored in a watched KEL at or after `since`.
+
+    `anchored_saids` above is this, projected onto `i`. Kept separate because a
+    seal's `i` alone cannot say WHAT was anchored, and that decides whether
+    asking for a body is meaningful at all.
+    """
+    return list(watcher.since(since if since is not None else watcher.checkpoint))
+
+
+def credential_anchors(reger, seals) -> list[str]:
+    """Of `seals`, the SAIDs that could name an ACDC body worth a `pro`.
+
+    A KEL anchors registry events as well as credential events, and the two are
+    the same `SealEvent(i, s, d)` shape. Asking a peer for the "body" behind a
+    registry event is asking for something that does not exist: it can only ever
+    be withheld, and withholding is SILENT (`ProdResponder.processProd` returns
+    None and logs "not marked disclosable" on the RESPONDER's side —
+    `keri/app/prodding.py:148-152`), so the asker re-asks on every tick forever.
+    Measured on the four-window actuarial arc: 27 of 33 prods the designer sent
+    went to the admin, which had nothing to disclose to it.
+
+    The discriminator is the event construction in `keri/vdr/eventing.py`, not a
+    guess:
+
+      - `vcp` (registry inception) builds its ked with BOTH `d=""` and `i=""`
+        and lets makify fill them, so the registry's identifier IS the event's
+        own SAID: `i == d` (:110-121). No ACDC exists behind it.
+      - `vrt` (registry rotation) sets `i = regk`, the registry identifier, with
+        its own `d` (:128+). Also not a credential — recognisable because `i` is
+        a registry we already know.
+      - `iss` sets `i = vcdig`, the CREDENTIAL SAID, with the event's own `d`
+        (:252-258); `rev` has the same shape at `s=1`. These are the ones worth
+        asking about.
+
+    So `i == d` is a registry inception, and an `i` already present in
+    `reger.tevers` is a registry event; everything else is a credential
+    candidate. Fails toward ASKING: an unreadable reger leaves the SAID in the
+    list, because a missed prod stalls a leg while a surplus one is only noise.
+    """
+    out = []
+    for _sn, seal in seals:
+        seal = seal or {}
+        said, dig = seal.get("i"), seal.get("d")
+        if not said:
+            continue
+        if dig and said == dig:
+            continue                        # vcp: the registry IS this event
+        try:
+            if said in reger.tevers:
+                continue                    # vrt (or a registry we hold): not an ACDC
+        except Exception:                   # noqa: BLE001 — unreadable means "unknown"
+            pass
+        out.append(said)
+    return out
 
 
 def ingest_response(hby, raw, *, verifier=None, exc=None, version=None) -> int:

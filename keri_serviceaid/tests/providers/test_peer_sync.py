@@ -14,7 +14,8 @@ from keri.app import habbing
 from keri.core import eventing
 
 from keri_serviceaid.providers.peer_sync import (
-    LOGS_ROUTE, SEALED_ROUTE, anchored_saids, body_request, kel_sync_request,
+    LOGS_ROUTE, SEALED_ROUTE, anchored_saids, anchored_seals, body_request,
+    credential_anchors, kel_sync_request,
     missing_bodies, signing_hab,
 )
 
@@ -241,3 +242,91 @@ def test_signing_hab_never_returns_a_non_transferable_identifier():
         assert signing_hab(hby, "default") is user
         # Asked for the listener by name, it still refuses it.
         assert signing_hab(hby, "peer-listener") is user
+
+
+# --- credential_anchors: a KEL anchors registry events too ------------------------
+#
+# Asking a peer for the "body" behind a registry event asks for something that
+# cannot exist, and withholding is SILENT (ProdResponder.processProd returns None
+# and logs on the RESPONDER's side), so the asker re-asks every tick forever.
+# Measured on the four-window actuarial arc: 27 of 33 prods the designer sent went
+# to the admin, which had nothing to disclose to it.
+
+
+class _Tevers(dict):
+    """`reger.tevers` is a mapping keyed by registry identifier."""
+
+
+def _reger_with_registries(*regs):
+    class _R:
+        tevers = _Tevers({r: object() for r in regs})
+    return _R()
+
+
+def test_a_registry_inception_anchor_is_not_a_credential_candidate():
+    """vcp builds its ked with BOTH d="" and i="" and lets makify fill them, so the
+    registry's identifier IS the event's own SAID (keri/vdr/eventing.py:110-121).
+    i == d is therefore a registry inception, and there is no ACDC behind it."""
+    reg = "E" + "R" * 43
+    seals = [(1, {"i": reg, "s": "0", "d": reg})]
+    assert credential_anchors(_reger_with_registries(), seals) == []
+
+
+def test_an_issuance_anchor_is_a_credential_candidate():
+    """iss sets i = vcdig, the CREDENTIAL SAID, with the event's own d
+    (keri/vdr/eventing.py:252-258). i != d, and i is not a registry."""
+    vc, dig = "E" + "V" * 43, "E" + "I" * 43
+    seals = [(1, {"i": vc, "s": "0", "d": dig})]
+    assert credential_anchors(_reger_with_registries(), seals) == [vc]
+
+
+def test_a_registry_rotation_anchor_is_not_a_credential_candidate():
+    """vrt sets i = regk with its own d, so i != d and the vcp test above cannot
+    catch it. It is recognisable only because i is a registry we already hold --
+    which is why this filter needs the reger, not just the seal."""
+    reg, dig = "E" + "R" * 43, "E" + "T" * 43
+    seals = [(2, {"i": reg, "s": "1", "d": dig})]
+    assert credential_anchors(_reger_with_registries(reg), seals) == []
+    # ...and the SAME seal IS a candidate to a reader that does not hold the
+    # registry, because nothing in the seal alone says otherwise. Honest: it will
+    # be asked for, withheld, and dropped by the caller's ask cap.
+    assert credential_anchors(_reger_with_registries(), seals) == [reg]
+
+
+def test_a_revocation_anchor_is_still_a_credential_candidate():
+    """rev has iss's shape at s=1 -- a revoked credential is exactly the state a
+    reader most needs to fetch."""
+    vc, dig = "E" + "V" * 43, "E" + "X" * 43
+    seals = [(2, {"i": vc, "s": "1", "d": dig})]
+    assert credential_anchors(_reger_with_registries(), seals) == [vc]
+
+
+def test_credential_anchors_skips_seals_with_no_i():
+    seals = [(1, {}), (2, {"d": "E" + "Z" * 43}), (3, None)]
+    assert credential_anchors(_reger_with_registries(), seals) == []
+
+
+def test_credential_anchors_fails_toward_asking_on_an_unreadable_reger():
+    """A missed prod stalls a leg; a surplus one is a log line. So an unreadable
+    registry must not silently drop candidates."""
+    class _Broken:
+        @property
+        def tevers(self):
+            raise RuntimeError("registry unreadable")
+
+    vc, dig = "E" + "V" * 43, "E" + "I" * 43
+    assert credential_anchors(_Broken(), [(1, {"i": vc, "d": dig})]) == [vc]
+
+
+def test_anchored_seals_preserves_the_d_that_anchored_saids_drops():
+    """anchored_saids projects onto `i`, which is exactly the field that cannot
+    tell a registry event from a credential event."""
+    class _Watcher:
+        checkpoint = 0
+
+        def since(self, _since):
+            return [(1, {"i": "E" + "A" * 43, "d": "E" + "B" * 43})]
+
+    assert anchored_seals(_Watcher()) == [(1, {"i": "E" + "A" * 43,
+                                               "d": "E" + "B" * 43})]
+    assert anchored_saids(_Watcher()) == ["E" + "A" * 43]
