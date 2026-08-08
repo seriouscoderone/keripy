@@ -293,6 +293,47 @@ def ingest_response(hby, raw, *, verifier=None, exc=None, version=None) -> int:
     return _height() - before
 
 
+def _index_disclosed(reger, creder) -> None:
+    """Index a disclosed credential so it can be USED, not merely held.
+
+    `reger.creds` is where a body lives; `reger.saved` is what makes it a valid
+    chain node. `Verifier.verifyChain` opens with
+
+        said = self.reger.saved.get(keys=nodeSaid)
+        if said is None:
+            return None
+
+    and its caller turns that None into `MissingChainError: Failure to verify
+    credential X chain <label>(Y)`. So a credential present in `creds`, with a
+    complete and valid TEL, still cannot be pointed at by an edge. Measured: the
+    actuary held the mandate, showed it in its UI, and its own
+    rate_program_attestation — whose whole purpose is to answer that mandate —
+    failed to issue, one second AFTER the mandate's TEL had landed.
+
+    Mirrors `Verifier.saveCredential`'s index writes (saved / issus / schms /
+    subjs). DELIBERATELY NOT `logCred`: that records the anchoring event's
+    provenance triple (`cancs`), and a `bar` cue does not carry it —
+    `Kevery.processBar` verifies the anchor via `anchoringPre`, which returns
+    only the anchoring AID, not the event's sn or digest. Nothing downstream of
+    chaining needs `cancs`, and inventing coordinates would be worse than
+    omitting them.
+
+    Marking a disclosed body `saved` is warranted on processBar's own checks: the
+    `a` block is SAID-keyed, each body re-derives to the SAID it is filed under,
+    and that SAID is anchored in the discloser's KEL. Revocation state is
+    separately checkable because `tel_sync_request` fetches the TEL.
+    """
+    from keri.core.coring import Saider
+
+    saider = Saider(qb64=creder.said)
+    reger.saved.pin(keys=saider.qb64b, val=saider)
+    reger.issus.add(keys=creder.issuer.encode("utf-8"), val=saider)
+    reger.schms.add(keys=creder.schema.encode("utf-8"), val=saider)
+    attrib = creder.attrib
+    if not isinstance(attrib, str) and isinstance(attrib, dict) and "i" in attrib:
+        reger.subjs.add(keys=attrib["i"].encode("utf-8"), val=saider)
+
+
 def _store_disclosed(kvy, verifier) -> int:
     """Persist bodies disclosed by a `bar`. Returns how many were stored.
 
@@ -334,7 +375,9 @@ def _store_disclosed(kvy, verifier) -> int:
             logger.debug("peer_sync.disclosed_not_acdc said=%s", str(said)[:12])
             continue
         try:
-            reger.creds.put(keys=(said,), val=SerderACDC(sad=sad))
+            creder = SerderACDC(sad=sad)
+            reger.creds.put(keys=(said,), val=creder)
+            _index_disclosed(reger, creder)
             stored += 1
             logger.info("peer_sync.stored said=%s", str(said)[:12])
         except Exception:               # noqa: BLE001
