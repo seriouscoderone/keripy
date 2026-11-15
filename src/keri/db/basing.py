@@ -1375,7 +1375,7 @@ class Baser(LMDBer):
                                                         coring.Diger, indexing.Siger))
 
         # tsgs: trans last sig groups (prefixer, number, diger, siger) — stored per-siger
-        self.kramTSGS = subing.CatCesrIoSetSuber(db=self, subkey='tsgs.',
+        self.kramTSGS = subing.CatCesrIoSetSuber(db=self, subkey='ktsg.',
                                                   klas=(coring.Prefixer, coring.Number,
                                                         coring.Diger, indexing.Siger))
 

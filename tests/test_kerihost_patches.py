@@ -21,3 +21,21 @@ def test_wss_loc_scheme_accepted():
         loc = sender.db.locs.get(keys=(provider.pre, "wss"))
         assert loc is not None
         assert loc.url == "wss://127.0.0.1:9999"
+
+
+from keri.core import Salter, Number, Diger
+from keri.db import basing
+
+
+def test_kram_tsgs_does_not_alias_tsgs():
+    """P2: kramTSGS and tsgs must not share an LMDB sub-database
+    (upstream opened both on 'tsgs.', basing.py:1067 and :1378)."""
+    signer = Salter(raw=b"0123456789abcdef").signer(transferable=False, temp=True)
+    siger = signer.sign(ser=b"kerihost", index=0)
+    pre = signer.verfer.qb64
+    dig = Diger(ser=b"kerihost").qb64
+    with basing.openDB(name="p2", temp=True) as db:
+        db.kramTSGS.add(keys=(dig,),
+                        val=(signer.verfer, Number(num=0), Diger(ser=b"est"), siger))
+        assert db.kramTSGS.cnt(keys=(dig,)) == 1
+        assert db.tsgs.cnt(keys=(dig,)) == 0
